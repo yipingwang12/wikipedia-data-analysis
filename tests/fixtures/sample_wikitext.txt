@@ -1,0 +1,9 @@
+{{Infobox person
+| name         = Claude Monet
+| birth_date   = {{birth date|1840|11|14}}
+| death_date   = {{death date|1926|12|5}}
+| nationality  = [[France|French]]
+| occupation   = [[Painting|Painter]]
+| birth_place  = [[Paris]], France
+}}
+'''Oscar-Claude Monet''' ({{IPA-fr|klod mɔnɛ}}; 14 November 1840 – 5 December 1926) was a French painter and founder of [[Impressionism|impressionist]] painting.
