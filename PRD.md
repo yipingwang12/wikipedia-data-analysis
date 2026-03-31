@@ -180,6 +180,17 @@ Transform pipeline output to GADM-compatible JSON for the [global-geo-atlas](htt
 }
 ```
 
+### Map App Changes (pending)
+
+The global-geo-atlas app needs 4 changes to consume `wikipedia.json`:
+
+1. **DataLoader.js** — add `wikipediaData` field, `loadWikipediaData()` fetch with `{}` fallback on missing file, `getWikipediaData(gid2)` accessor. Reset in `setCountry()`. Same pattern as existing `loadCityData()`.
+2. **gadm-defaults.js** — add `wikipediaData: /data/${meta.id}/wikipedia.json` to the `data` object in `buildGadmConfig()`.
+3. **MapRenderer.js** — in `handleCountyHover()`, after city data section, append population, area, and Wikipedia link from `dataLoader.getWikipediaData(id)`.
+4. **Country switch loader** — call `await dataLoader.loadWikipediaData()` alongside existing `loadMetroData()` / `loadCityData()` calls.
+
+Graceful degradation: missing `wikipedia.json` returns `{}`, missing keys return `null`, tooltip rows simply omitted.
+
 ## Key Design Decisions
 
 - **Regex as default search** — scan all category names with user-defined patterns; more flexible than single-root BFS for thematic queries
