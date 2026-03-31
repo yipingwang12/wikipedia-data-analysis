@@ -180,14 +180,14 @@ Transform pipeline output to GADM-compatible JSON for the [global-geo-atlas](htt
 }
 ```
 
-### Map App Changes (pending)
+### Map App Changes
 
-The global-geo-atlas app needs 4 changes to consume `wikipedia.json`:
+Implemented on the `feature/wikipedia-integration` branch of [global-geo-atlas](https://github.com/yipingwang12/global-geo-atlas):
 
-1. **DataLoader.js** — add `wikipediaData` field, `loadWikipediaData()` fetch with `{}` fallback on missing file, `getWikipediaData(gid2)` accessor. Reset in `setCountry()`. Same pattern as existing `loadCityData()`.
-2. **gadm-defaults.js** — add `wikipediaData: /data/${meta.id}/wikipedia.json` to the `data` object in `buildGadmConfig()`.
-3. **MapRenderer.js** — in `handleCountyHover()`, after city data section, append population, area, and Wikipedia link from `dataLoader.getWikipediaData(id)`.
-4. **Country switch loader** — call `await dataLoader.loadWikipediaData()` alongside existing `loadMetroData()` / `loadCityData()` calls.
+1. **DataLoader.js** — `loadWikipediaData()` fetch with `{}` fallback, `getWikipediaData(gid2)` accessor, reset in `setCountry()`
+2. **gadm-defaults.js** — `wikipediaData: /data/${meta.id}/wikipedia.json` in `buildGadmConfig()`
+3. **MapRenderer.js** — population, area, Wikipedia link in hover tooltip via `getWikipediaData(id)`
+4. **main.js** — `loadWikipediaData()` called on country switch alongside metro/city data
 
 Graceful degradation: missing `wikipedia.json` returns `{}`, missing keys return `null`, tooltip rows simply omitted.
 
