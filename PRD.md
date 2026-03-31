@@ -191,6 +191,21 @@ Implemented on the `feature/wikipedia-integration` branch of [global-geo-atlas](
 
 Graceful degradation: missing `wikipedia.json` returns `{}`, missing keys return `null`, tooltip rows simply omitted.
 
+### Future: Unified Monorepo
+
+Goal: run both pipelines (Wikipedia extraction + map app) from a single directory with shared orchestration. Proposed structure:
+
+```
+wikipedia-maps/
+├── wikipedia-pipeline/      # this repo (git subtree)
+├── global-geo-atlas/        # map app repo (git subtree)
+└── integration/
+    ├── config.py            # per-country settings: pattern file, join fields, GADM paths
+    └── run.py               # orchestrator: pipeline → transform → place per country
+```
+
+`run.py` would iterate countries from `config.py`, invoke the Wikipedia pipeline with the appropriate geo pattern file, transform CSV → `wikipedia.json`, and place output in the map app's `data/{country-id}/` directory. Supports `--country {id}` for single-country runs and `--all` for batch.
+
 ## Key Design Decisions
 
 - **Regex as default search** — scan all category names with user-defined patterns; more flexible than single-root BFS for thematic queries
