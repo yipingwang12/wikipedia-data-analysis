@@ -1,6 +1,6 @@
 # Wikipedia Category Data Pipeline
 
-Extract structured data (birth/death dates, nationality, occupation) from Wikipedia articles found via regex category search or BFS traversal.
+Extract structured data from Wikipedia articles found via regex category search or BFS traversal. Two extraction modes: biographical (birth/death dates, nationality, occupation) and geographic (population, area, elevation, subdivision).
 
 ## Search Modes
 
@@ -17,8 +17,9 @@ Traditional BFS from a single root category with optional `--max-depth` limit. P
 3. **Search** — Regex pattern matching on category names (default) OR BFS traversal from root category
 4. **Filter** — In-memory filter by length/namespace from cached page_meta (default min 5000 bytes, excludes stubs)
 5. **Fetch** — Batch wikitext + plaintext via MediaWiki API
-6. **Extract** — Infobox parsing (primary) → NLP regex extraction (secondary) → Claude LLM fallback (tertiary)
+6. **Extract** — Infobox parsing (primary) → NLP regex extraction (secondary, bio mode only) → Claude LLM fallback (tertiary)
 7. **Output** — CSV/TSV with page_id, title, and extracted fields
+8. **Transform** (optional) — CSV → `wikipedia.json` keyed by GADM GID_2 for map integration
 
 ## Usage
 
@@ -32,12 +33,22 @@ wiki-pipeline --patterns "paint" "sculpt" "drawing"
 wiki-pipeline French_painters --dry-run
 wiki-pipeline Painters_by_nationality --dry-run
 wiki-pipeline "Writers by nationality" --dry-run --max-depth 2
+
+# Geographic mode — extract settlement/county data
+wiki-pipeline --patterns-file patterns/geo/admin_subdivisions.txt --extraction-mode geo --dry-run
+wiki-pipeline --patterns-file patterns/geo/populated_places.txt --extraction-mode geo
+
+# Integration: pipeline → transform → map app data
+python scripts/run_geo_integration.py --country us --map-data-dir /path/to/global-geo-atlas/data
+python scripts/transform_to_gadm.py --csv results/geo/regex_results.csv --gadm-data-dir /path/to/data/us --output /path/to/data/us/wikipedia.json
 ```
 
 ### Flags
 
 - `--patterns REGEX [REGEX ...]` — regex patterns to match category names (case-insensitive)
 - `--patterns-file PATH` — file with one regex pattern per line (combinable with `--patterns`)
+- `--extraction-mode bio|geo` — biographical (default) or geographic field extraction
+- `--required-fields FIELD [...]` — override default fields (auto-set by extraction mode)
 - `--max-depth N` — limit BFS to N levels below root (default: unlimited)
 - `--no-cache` — bypass cache read/write, force full re-parse
 - `--clear-cache` — delete cached files before run
@@ -63,13 +74,26 @@ Pre-built pattern files in `patterns/` for 13 categories of notable people:
 | explorers.txt | 6 | 857 | 10,348 | 6,154 |
 | **Total (deduplicated)** | | **217,836** | **2,471,918** | **1,034,547** |
 
-Patterns use word-boundary anchors (`(?:^|_)..(?:$|_)`) to avoid false positives. Broad terms like `artist` or `king` are either qualified (`graphic_artists`) or bounded to exclude noise (place names, band names, etc.).
+Biographical patterns use word-boundary anchors (`(?:^|_)..(?:$|_)`). Geographic patterns use `(?:_in_|_of_)` suffixes matching Wikipedia's `Things_in_Place` convention.
+
+### Geographic Patterns (`patterns/geo/`)
+
+| File | Patterns | Purpose |
+|---|---|---|
+| admin_subdivisions.txt | 20 | Counties, municipalities, districts |
+| populated_places.txt | 12 | Cities, towns, county seats |
+| geographic_features.txt | 18 | Rivers, mountains, lakes, valleys |
+| parks_protected.txt | 9 | National parks, nature reserves |
+| transportation.txt | 12 | Airports, highways, railways |
+| buildings_structures.txt | 10 | Universities, museums, stadiums |
+| historical_cultural.txt | 16 | Historic sites, castles, UNESCO |
+| demographics_economy.txt | 8 | Economy, demographics, companies |
 
 ## Architecture
 
 ```
 src/wiki_pipeline/
-  config.py          # frozen dataclass + argparse CLI, search_mode property
+  config.py          # frozen dataclass + argparse CLI, search_mode/extraction_mode
   download.py        # streaming download w/ resume + exponential backoff
   sql_parser.py      # streaming MySQL INSERT parser (C-speed str.find)
   category_tree.py   # parse_page_dump, parse_category_links, bfs_from_root,
@@ -78,13 +102,19 @@ src/wiki_pipeline/
   cache.py           # pickle save/load with .meta mtime sidecar
   pipeline.py        # cache-aware orchestrator (regex + BFS modes)
   wiki_api.py        # MediaWiki API client (batched, rate-limited)
-  infobox_parser.py  # mwparserfromhell field extraction
-  nlp_extractor.py   # regex extraction from first-sentence biographical patterns
-  llm_extractor.py   # Claude Haiku fallback for missing fields
-  output.py          # CSV/TSV writer
+  infobox_parser.py      # mwparserfromhell biographical field extraction
+  geo_infobox_parser.py  # mwparserfromhell geographic field extraction
+  nlp_extractor.py       # regex extraction from first-sentence biographical patterns
+  llm_extractor.py       # Claude Haiku fallback for missing fields
+  output.py              # CSV/TSV writer
 
-patterns/             # pre-built regex pattern files (one pattern per line)
-results/              # output directory for pipeline results
+scripts/
+  transform_to_gadm.py    # CSV → wikipedia.json keyed by GADM GID_2
+  run_geo_integration.py   # orchestrator: pipeline → transform → map data dir
+
+patterns/              # biographical regex pattern files
+patterns/geo/          # geographic regex pattern files
+results/               # output directory for pipeline results
 ```
 
 ## Performance
@@ -98,9 +128,11 @@ Initial parse (cold cache): ~30 min (one-time cost, shared across all searches)
 
 ## Tests
 
-187 tests. Run: `.venv/bin/python -m pytest tests/ -v`
+221 tests. Run: `.venv/bin/python -m pytest tests/ -v`
 
-## Extraction Tiers
+## Extraction Modes
+
+### Biographical (`--extraction-mode bio`, default)
 
 Three-tier field extraction for birth_date, death_date, nationality, occupation:
 
@@ -126,6 +158,28 @@ Three-tier field extraction for birth_date, death_date, nationality, occupation:
 
 NLP tier contributed on 94% of articles. The 25 "none" results were list pages and redirects. LLM tier was not invoked in benchmarking.
 
+### Geographic (`--extraction-mode geo`)
+
+Extracts population, area_km2, elevation_m, subdivision_name, subdivision_type from settlement/city/county/district/place infoboxes. Same three-tier cascade (geo infobox → NLP skipped → LLM fallback). Field aliases map common infobox variants (e.g., `population_total`, `pop` → `population`).
+
+## Map Integration
+
+Transform pipeline output to GADM-compatible JSON for the [global-geo-atlas](https://github.com/yipingwang12/global-geo-atlas) map app.
+
+**Join strategy**: normalize Wikipedia article titles and GADM NAME_2+NAME_1 fields, strip admin suffixes (County, Parish, Borough), match case-insensitively. Unmatched rows logged to `unmatched.csv`.
+
+**Output format** (`wikipedia.json`):
+```json
+{
+  "USA.14.17_1": {
+    "title": "Cook County, Illinois",
+    "population": "5275541",
+    "area_km2": "2448",
+    "wikipedia_url": "https://en.wikipedia.org/wiki/Cook_County,_Illinois"
+  }
+}
+```
+
 ## Key Design Decisions
 
 - **Regex as default search** — scan all category names with user-defined patterns; more flexible than single-root BFS for thematic queries
@@ -136,3 +190,5 @@ NLP tier contributed on 94% of articles. The 25 "none" results were list pages a
 - **Streaming SQL parser** — `str.find()` scanning for multi-hundred-MB INSERT lines, O(1) memory per row
 - **Three-tier extraction** — infobox → NLP regex → LLM fallback → None; NLP tier eliminates most LLM calls at zero cost
 - **Word-boundary anchored patterns** — prevent false positives from substring matches (e.g., `count` in "county")
+- **Dual extraction modes** — bio/geo share pipeline infrastructure; only infobox parser and default fields differ
+- **GADM join by title normalization** — avoids external dependency on Wikidata; suffix stripping handles County/Parish/Borough variants
