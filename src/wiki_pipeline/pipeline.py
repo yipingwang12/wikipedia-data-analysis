@@ -21,6 +21,7 @@ from .config import PipelineConfig, parse_args
 from .download import download_dump
 from .infobox_parser import extract_infobox_fields
 from .llm_extractor import LlmExtractor
+from .nlp_extractor import extract_from_text
 from .output import write_results
 from .page_filter import filter_pages_from_meta
 from .wiki_api import WikiApiClient
@@ -163,9 +164,10 @@ def run(config: PipelineConfig) -> Path | None:
     print(f"  Total time: {t_filt - t0:.1f}s", flush=True)
 
     if config.dry_run:
-        est_calls = int(len(pages) * 0.3)
-        est_cost = est_calls * 0.001
-        print(f"Dry run — estimated LLM calls: ~{est_calls}, cost: ~${est_cost:.2f}")
+        est_nlp = int(len(pages) * 0.3)
+        est_llm = int(len(pages) * 0.1)
+        est_cost = est_llm * 0.001
+        print(f"Dry run — estimated NLP: ~{est_nlp}, LLM: ~{est_llm}, cost: ~${est_cost:.2f}")
         return None
 
     # Fetch content via API
@@ -180,9 +182,10 @@ def run(config: PipelineConfig) -> Path | None:
     wikitext_map = api.fetch_wikitext_batch(titles)
     plaintext_map = api.fetch_plaintext_batch(titles)
 
-    # Extract fields: infobox → LLM fallback
+    # Extract fields: infobox → NLP regex → LLM fallback
     llm = LlmExtractor(model=config.claude_model)
     records: list[dict[str, str | int | None]] = []
+    nlp_fills = 0
     llm_calls = 0
 
     for title in titles:
@@ -191,10 +194,17 @@ def run(config: PipelineConfig) -> Path | None:
 
         has_gaps = any(v is None for v in fields.values())
         if has_gaps and title in plaintext_map:
-            fields = llm.extract_missing(
+            fields = extract_from_text(
                 plaintext_map[title], fields, config.required_fields
             )
-            llm_calls += 1
+            nlp_fills += 1
+
+            has_gaps = any(v is None for v in fields.values())
+            if has_gaps:
+                fields = llm.extract_missing(
+                    plaintext_map[title], fields, config.required_fields
+                )
+                llm_calls += 1
 
         record: dict[str, str | int | None] = {
             "page_id": title_to_id.get(title, 0),
@@ -203,7 +213,7 @@ def run(config: PipelineConfig) -> Path | None:
         record.update(fields)
         records.append(record)
 
-    print(f"Processed {len(records)} articles, {llm_calls} LLM fallback calls")
+    print(f"Processed {len(records)} articles, {nlp_fills} NLP extractions, {llm_calls} LLM calls")
 
     # Write output
     ext = "tsv" if config.output_format == "tsv" else "csv"

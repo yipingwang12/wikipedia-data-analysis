@@ -39,9 +39,10 @@ class TestPipeline:
     @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
     @patch("wiki_pipeline.pipeline.WikiApiClient")
     @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
     @patch("wiki_pipeline.pipeline.load_dotenv")
     def test_end_to_end(
-        self, mock_dotenv, mock_llm_cls, mock_api_cls,
+        self, mock_dotenv, mock_nlp, mock_llm_cls, mock_api_cls,
         mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
     ):
         mock_download.side_effect = lambda url, dest: dest
@@ -64,6 +65,8 @@ class TestPipeline:
             "Article A": "Article A text",
             "Article B": "Article B text",
         }
+        # NLP passthrough (returns all None → LLM still called)
+        mock_nlp.side_effect = lambda text, existing, fields: dict(existing)
         llm_instance = mock_llm_cls.return_value
         llm_instance.extract_missing.return_value = {
             "birth_date": "1920", "death_date": None,
@@ -107,9 +110,10 @@ class TestPipeline:
     @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
     @patch("wiki_pipeline.pipeline.WikiApiClient")
     @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
     @patch("wiki_pipeline.pipeline.load_dotenv")
     def test_config_propagation(
-        self, mock_dotenv, mock_llm_cls, mock_api_cls,
+        self, mock_dotenv, mock_nlp, mock_llm_cls, mock_api_cls,
         mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
     ):
         """API client receives config values."""
@@ -123,6 +127,7 @@ class TestPipeline:
         api_instance = mock_api_cls.return_value
         api_instance.fetch_wikitext_batch.return_value = {"A": "text"}
         api_instance.fetch_plaintext_batch.return_value = {"A": "plain"}
+        mock_nlp.side_effect = lambda text, existing, fields: dict(existing)
         llm_instance = mock_llm_cls.return_value
         llm_instance.extract_missing.return_value = {
             "birth_date": None, "death_date": None,
@@ -365,9 +370,10 @@ class TestPipelineRegexMode:
     @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
     @patch("wiki_pipeline.pipeline.WikiApiClient")
     @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
     @patch("wiki_pipeline.pipeline.load_dotenv")
     def test_regex_full_run(
-        self, mock_dotenv, mock_llm_cls, mock_api_cls,
+        self, mock_dotenv, mock_nlp, mock_llm_cls, mock_api_cls,
         mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
     ):
         mock_download.side_effect = lambda url, dest: dest
@@ -383,6 +389,7 @@ class TestPipelineRegexMode:
         api_instance = mock_api_cls.return_value
         api_instance.fetch_wikitext_batch.return_value = {"Monet": "{{Infobox}}"}
         api_instance.fetch_plaintext_batch.return_value = {"Monet": "text"}
+        mock_nlp.side_effect = lambda text, existing, fields: dict(existing)
         llm_instance = mock_llm_cls.return_value
         llm_instance.extract_missing.return_value = {
             "birth_date": "1840", "death_date": "1926",
@@ -398,3 +405,112 @@ class TestPipelineRegexMode:
         assert result is not None
         assert result.exists()
         assert "Monet" in result.read_text()
+
+
+class TestPipelineThreeTierExtraction:
+    """Verify infobox → NLP → LLM fallback chain."""
+
+    def _setup_mocks(self, tmp_path, mock_download, mock_page, mock_lt,
+                     mock_catlinks, mock_filter, mock_api_cls):
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = ({}, {1: ("A", 6000)})
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(
+            cat_pages={"Test_Category": {1}},
+        )
+        mock_filter.return_value = [PageInfo(1, "A", 6000)]
+        api = mock_api_cls.return_value
+        api.fetch_wikitext_batch.return_value = {"A": "no infobox"}
+        api.fetch_plaintext_batch.return_value = {"A": "some text"}
+        return api
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.WikiApiClient")
+    @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_nlp_fills_all_gaps_skips_llm(
+        self, mock_dotenv, mock_nlp, mock_llm_cls, mock_api_cls,
+        mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
+    ):
+        """When NLP fills all gaps, LLM should not be called."""
+        self._setup_mocks(tmp_path, mock_download, mock_page, mock_lt,
+                          mock_catlinks, mock_filter, mock_api_cls)
+        mock_nlp.return_value = {
+            "birth_date": "1900-01-01", "death_date": "1970-01-01",
+            "nationality": "French", "occupation": "painter",
+        }
+
+        config = _config(tmp_path)
+        run(config)
+
+        mock_nlp.assert_called_once()
+        mock_llm_cls.return_value.extract_missing.assert_not_called()
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.WikiApiClient")
+    @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_nlp_partial_fill_then_llm(
+        self, mock_dotenv, mock_nlp, mock_llm_cls, mock_api_cls,
+        mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
+    ):
+        """When NLP fills some gaps, LLM is called for remaining."""
+        self._setup_mocks(tmp_path, mock_download, mock_page, mock_lt,
+                          mock_catlinks, mock_filter, mock_api_cls)
+        mock_nlp.return_value = {
+            "birth_date": "1900-01-01", "death_date": "1970-01-01",
+            "nationality": None, "occupation": None,
+        }
+        mock_llm_cls.return_value.extract_missing.return_value = {
+            "birth_date": "1900-01-01", "death_date": "1970-01-01",
+            "nationality": "French", "occupation": "painter",
+        }
+
+        config = _config(tmp_path)
+        run(config)
+
+        mock_nlp.assert_called_once()
+        mock_llm_cls.return_value.extract_missing.assert_called_once()
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.WikiApiClient")
+    @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_infobox_fills_all_skips_nlp_and_llm(
+        self, mock_dotenv, mock_nlp, mock_llm_cls, mock_api_cls,
+        mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
+    ):
+        """When infobox fills all fields, neither NLP nor LLM is called."""
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = ({}, {1: ("A", 6000)})
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(
+            cat_pages={"Test_Category": {1}},
+        )
+        mock_filter.return_value = [PageInfo(1, "A", 6000)]
+        api = mock_api_cls.return_value
+        api.fetch_wikitext_batch.return_value = {
+            "A": "{{Infobox person|birth_date={{birth date|1900|1|1}}|nationality=French|occupation=Painter|death_date={{death date|1970|1|1}}}}",
+        }
+        api.fetch_plaintext_batch.return_value = {"A": "text"}
+
+        config = _config(tmp_path)
+        run(config)
+
+        mock_nlp.assert_not_called()
+        mock_llm_cls.return_value.extract_missing.assert_not_called()
