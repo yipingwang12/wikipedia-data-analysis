@@ -1,0 +1,8 @@
+(?:^|_)Demographics(?:_of_)
+(?:^|_)Economy(?:_of_)
+(?:^|_)Ethnic_groups(?:_in_|_of_)
+(?:^|_)Languages(?:_of_)
+(?:^|_)Companies(?:_based_in_)
+(?:^|_)Agriculture(?:_in_|_of_)
+(?:^|_)Industry(?:_in_|_of_)
+(?:^|_)Tourism(?:_in_|_of_)
