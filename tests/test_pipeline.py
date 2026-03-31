@@ -407,6 +407,80 @@ class TestPipelineRegexMode:
         assert "Monet" in result.read_text()
 
 
+class TestPipelineGeoMode:
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.WikiApiClient")
+    @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_geo_mode_uses_geo_extractor(
+        self, mock_dotenv, mock_nlp, mock_llm_cls, mock_api_cls,
+        mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
+    ):
+        """Geo mode should use extract_geo_infobox_fields, not extract_infobox_fields."""
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = ({}, {1: ("A", 6000)})
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(
+            cat_pages={"Test_Category": {1}},
+        )
+        mock_filter.return_value = [PageInfo(1, "A", 6000)]
+        api = mock_api_cls.return_value
+        api.fetch_wikitext_batch.return_value = {
+            "A": "{{Infobox settlement|population_total=50000|area_km2=100|elevation_m=200|subdivision_name1=Illinois|subdivision_type1=State}}",
+        }
+        api.fetch_plaintext_batch.return_value = {"A": "Springfield is a city."}
+        mock_nlp.side_effect = lambda text, existing, fields: dict(existing)
+        mock_llm_cls.return_value.extract_missing.return_value = {
+            "population": "50000", "area_km2": "100",
+            "elevation_m": "200", "subdivision_name": "Illinois",
+            "subdivision_type": "State",
+        }
+
+        geo_fields = ("population", "area_km2", "elevation_m", "subdivision_name", "subdivision_type")
+        config = _config(tmp_path, extraction_mode="geo", required_fields=geo_fields)
+        result = run(config)
+
+        assert result is not None
+        assert result.exists()
+        content = result.read_text()
+        assert "50000" in content
+        assert "Illinois" in content
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_geo_mode_dry_run(
+        self, mock_dotenv, mock_filter, mock_catlinks, mock_lt,
+        mock_page, mock_download, tmp_path
+    ):
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = ({1: "Counties_in_Illinois"}, {100: ("Cook_County", 6000)})
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(
+            cat_pages={"Counties_in_Illinois": {100}},
+        )
+        mock_filter.return_value = [PageInfo(100, "Cook_County", 6000)]
+
+        config = _config(
+            tmp_path,
+            root_category=None,
+            category_patterns=(r"Counties(?:_in_|_of_)",),
+            extraction_mode="geo",
+            required_fields=("population", "area_km2"),
+            dry_run=True,
+        )
+        result = run(config)
+        assert result is None
+
+
 class TestPipelineThreeTierExtraction:
     """Verify infobox → NLP → LLM fallback chain."""
 

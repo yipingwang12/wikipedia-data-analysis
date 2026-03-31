@@ -37,6 +37,14 @@ class TestPipelineConfig:
         cfg = PipelineConfig(root_category="Test", category_patterns=("paint",))
         assert cfg.search_mode == "regex"
 
+    def test_extraction_mode_default_bio(self):
+        cfg = PipelineConfig(root_category="Test")
+        assert cfg.extraction_mode == "bio"
+
+    def test_extraction_mode_geo(self):
+        cfg = PipelineConfig(root_category="Test", extraction_mode="geo")
+        assert cfg.extraction_mode == "geo"
+
 
 class TestParseArgs:
     def test_minimal_bfs(self):
@@ -108,3 +116,20 @@ class TestParseArgs:
         pfile.write_text("from_file\n")
         cfg = parse_args(["--patterns", "from_cli", "--patterns-file", str(pfile)])
         assert cfg.category_patterns == ("from_cli", "from_file")
+
+    def test_extraction_mode_bio_default_fields(self):
+        cfg = parse_args(["Cat"])
+        assert cfg.extraction_mode == "bio"
+        assert "birth_date" in cfg.required_fields
+
+    def test_extraction_mode_geo_default_fields(self):
+        cfg = parse_args(["Cat", "--extraction-mode", "geo"])
+        assert cfg.extraction_mode == "geo"
+        assert "population" in cfg.required_fields
+        assert "area_km2" in cfg.required_fields
+        assert "birth_date" not in cfg.required_fields
+
+    def test_extraction_mode_geo_with_custom_fields(self):
+        cfg = parse_args(["Cat", "--extraction-mode", "geo", "--required-fields", "population"])
+        assert cfg.extraction_mode == "geo"
+        assert cfg.required_fields == ("population",)

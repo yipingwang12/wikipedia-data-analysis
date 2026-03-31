@@ -19,6 +19,7 @@ from .category_tree import (
 )
 from .config import PipelineConfig, parse_args
 from .download import download_dump
+from .geo_infobox_parser import extract_geo_infobox_fields
 from .infobox_parser import extract_infobox_fields
 from .llm_extractor import LlmExtractor
 from .nlp_extractor import extract_from_text
@@ -188,9 +189,11 @@ def run(config: PipelineConfig) -> Path | None:
     nlp_fills = 0
     llm_calls = 0
 
+    extract_fn = extract_geo_infobox_fields if config.extraction_mode == "geo" else extract_infobox_fields
+
     for title in titles:
         wikitext = wikitext_map.get(title, "")
-        fields = extract_infobox_fields(wikitext, config.required_fields)
+        fields = extract_fn(wikitext, config.required_fields)
 
         has_gaps = any(v is None for v in fields.values())
         if has_gaps and title in plaintext_map:

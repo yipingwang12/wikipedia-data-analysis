@@ -25,6 +25,7 @@ class PipelineConfig:
         "nationality",
         "occupation",
     )
+    extraction_mode: str = "bio"
     output_format: str = "csv"
     max_depth: int | None = None
     dry_run: bool = False
@@ -52,7 +53,10 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     p.add_argument("--api-batch-size", type=int, default=50)
     p.add_argument("--api-rate-limit", type=float, default=0.1)
     p.add_argument("--claude-model", default="claude-haiku-4-5-20251001")
-    p.add_argument("--required-fields", nargs="+", default=["birth_date", "death_date", "nationality", "occupation"])
+    p.add_argument("--extraction-mode", choices=["bio", "geo"], default="bio",
+                    help="Extraction mode: bio (biographical) or geo (geographic)")
+    p.add_argument("--required-fields", nargs="+", default=None,
+                    help="Fields to extract (default depends on extraction mode)")
     p.add_argument("--output-format", choices=["csv", "tsv"], default="csv")
     p.add_argument("--max-depth", type=int, default=None, help="Max BFS depth (0=root only, None=unlimited)")
     p.add_argument("--dry-run", action="store_true", help="Stop before API calls, report counts")
@@ -71,6 +75,14 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     if not args.root_category and not patterns:
         p.error("provide either root_category (BFS mode) or --patterns/--patterns-file (regex mode)")
 
+    # Default required_fields depends on extraction mode
+    if args.required_fields is not None:
+        required_fields = tuple(args.required_fields)
+    elif args.extraction_mode == "geo":
+        required_fields = ("population", "area_km2", "elevation_m", "subdivision_name", "subdivision_type")
+    else:
+        required_fields = ("birth_date", "death_date", "nationality", "occupation")
+
     return PipelineConfig(
         root_category=args.root_category,
         category_patterns=tuple(patterns),
@@ -80,7 +92,8 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
         api_batch_size=args.api_batch_size,
         api_rate_limit_s=args.api_rate_limit,
         claude_model=args.claude_model,
-        required_fields=tuple(args.required_fields),
+        required_fields=required_fields,
+        extraction_mode=args.extraction_mode,
         output_format=args.output_format,
         max_depth=args.max_depth,
         dry_run=args.dry_run,
