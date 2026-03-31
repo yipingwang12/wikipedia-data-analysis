@@ -25,12 +25,25 @@ class TestPipelineConfig:
         with pytest.raises(AttributeError):
             cfg.root_category = "Other"
 
+    def test_search_mode_bfs(self):
+        cfg = PipelineConfig(root_category="Test")
+        assert cfg.search_mode == "bfs"
+
+    def test_search_mode_regex(self):
+        cfg = PipelineConfig(category_patterns=("paint",))
+        assert cfg.search_mode == "regex"
+
+    def test_search_mode_regex_takes_precedence(self):
+        cfg = PipelineConfig(root_category="Test", category_patterns=("paint",))
+        assert cfg.search_mode == "regex"
+
 
 class TestParseArgs:
-    def test_minimal(self):
+    def test_minimal_bfs(self):
         cfg = parse_args(["Impressionist_painters"])
         assert cfg.root_category == "Impressionist_painters"
         assert cfg.min_page_length == 5000
+        assert cfg.search_mode == "bfs"
 
     def test_all_flags(self):
         cfg = parse_args([
@@ -68,6 +81,30 @@ class TestParseArgs:
         assert cfg.no_cache is True
         assert cfg.clear_cache is False
 
-    def test_missing_root_category_exits(self):
+    def test_no_args_exits(self):
         with pytest.raises(SystemExit):
             parse_args([])
+
+    def test_patterns_flag(self):
+        cfg = parse_args(["--patterns", "French.*paint", "Italian.*sculpt"])
+        assert cfg.category_patterns == ("French.*paint", "Italian.*sculpt")
+        assert cfg.root_category is None
+        assert cfg.search_mode == "regex"
+
+    def test_patterns_file(self, tmp_path):
+        pfile = tmp_path / "patterns.txt"
+        pfile.write_text("French.*paint\nItalian.*sculpt\n\n")
+        cfg = parse_args(["--patterns-file", str(pfile)])
+        assert cfg.category_patterns == ("French.*paint", "Italian.*sculpt")
+
+    def test_patterns_and_root_category(self):
+        cfg = parse_args(["Root", "--patterns", "paint"])
+        assert cfg.root_category == "Root"
+        assert cfg.category_patterns == ("paint",)
+        assert cfg.search_mode == "regex"
+
+    def test_patterns_combined_with_file(self, tmp_path):
+        pfile = tmp_path / "patterns.txt"
+        pfile.write_text("from_file\n")
+        cfg = parse_args(["--patterns", "from_cli", "--patterns-file", str(pfile)])
+        assert cfg.category_patterns == ("from_cli", "from_file")

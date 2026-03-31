@@ -139,6 +139,31 @@ class TestPipeline:
         )
 
 
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.bfs_from_root")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_max_depth_passed_to_bfs(
+        self, mock_dotenv, mock_filter, mock_bfs, mock_catlinks, mock_lt,
+        mock_page, mock_download, tmp_path
+    ):
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = ({}, {1: ("A", 6000)})
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = _PARSED
+        mock_bfs.return_value = CategoryTree(
+            article_ids={1}, depth_stats=[(1, 1)],
+        )
+        mock_filter.return_value = [PageInfo(1, "A", 6000)]
+
+        config = _config(tmp_path, dry_run=True, max_depth=5)
+        run(config)
+        mock_bfs.assert_called_once_with(_PARSED, "Test_Category", max_depth=5)
+
+
 class TestPipelineCache:
     @patch("wiki_pipeline.pipeline.download_dump")
     @patch("wiki_pipeline.pipeline.load_pickle")
@@ -231,3 +256,145 @@ class TestPipelineCache:
         run(config)
         mock_load.assert_not_called()
         mock_save.assert_not_called()
+
+
+class TestPipelineRegexMode:
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_regex_dry_run(
+        self, mock_dotenv, mock_filter, mock_catlinks, mock_lt,
+        mock_page, mock_download, tmp_path
+    ):
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = (
+            {1: "French_painters", 2: "Italian_sculptors", 3: "German_poets"},
+            {100: ("Monet", 6000), 101: ("Rodin", 7000), 102: ("Goethe", 5000)},
+        )
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(
+            cat_pages={
+                "French_painters": {100},
+                "Italian_sculptors": {101},
+                "German_poets": {102},
+            },
+        )
+        mock_filter.return_value = [PageInfo(100, "Monet", 6000)]
+
+        config = _config(
+            tmp_path,
+            root_category=None,
+            category_patterns=(r"French",),
+            dry_run=True,
+        )
+        result = run(config)
+        assert result is None
+        # filter_pages_from_meta should have been called with only French_painters articles
+        call_args = mock_filter.call_args
+        assert call_args[0][1] == {100}  # article_ids from French_painters only
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_regex_multiple_patterns(
+        self, mock_dotenv, mock_filter, mock_catlinks, mock_lt,
+        mock_page, mock_download, tmp_path
+    ):
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = (
+            {1: "French_painters", 2: "Italian_sculptors", 3: "German_poets"},
+            {100: ("A", 6000), 101: ("B", 7000), 102: ("C", 5000)},
+        )
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(
+            cat_pages={
+                "French_painters": {100},
+                "Italian_sculptors": {101},
+                "German_poets": {102},
+            },
+        )
+        mock_filter.return_value = []
+
+        config = _config(
+            tmp_path,
+            root_category=None,
+            category_patterns=(r"paint", r"sculpt"),
+            dry_run=True,
+        )
+        run(config)
+        call_args = mock_filter.call_args
+        assert call_args[0][1] == {100, 101}
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_regex_no_bfs_called(
+        self, mock_dotenv, mock_filter, mock_catlinks, mock_lt,
+        mock_page, mock_download, tmp_path
+    ):
+        """Regex mode should not call bfs_from_root."""
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = ({1: "CatA"}, {})
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(cat_pages={"CatA": {1}})
+        mock_filter.return_value = []
+
+        config = _config(
+            tmp_path,
+            root_category=None,
+            category_patterns=(r"Cat",),
+            dry_run=True,
+        )
+        with patch("wiki_pipeline.pipeline.bfs_from_root") as mock_bfs:
+            run(config)
+            mock_bfs.assert_not_called()
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.WikiApiClient")
+    @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_regex_full_run(
+        self, mock_dotenv, mock_llm_cls, mock_api_cls,
+        mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
+    ):
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = (
+            {1: "French_painters"},
+            {100: ("Monet", 6000)},
+        )
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(
+            cat_pages={"French_painters": {100}},
+        )
+        mock_filter.return_value = [PageInfo(100, "Monet", 6000)]
+        api_instance = mock_api_cls.return_value
+        api_instance.fetch_wikitext_batch.return_value = {"Monet": "{{Infobox}}"}
+        api_instance.fetch_plaintext_batch.return_value = {"Monet": "text"}
+        llm_instance = mock_llm_cls.return_value
+        llm_instance.extract_missing.return_value = {
+            "birth_date": "1840", "death_date": "1926",
+            "nationality": "French", "occupation": "Painter",
+        }
+
+        config = _config(
+            tmp_path,
+            root_category=None,
+            category_patterns=(r"French",),
+        )
+        result = run(config)
+        assert result is not None
+        assert result.exists()
+        assert "Monet" in result.read_text()

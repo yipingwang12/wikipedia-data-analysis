@@ -9,7 +9,8 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class PipelineConfig:
-    root_category: str
+    root_category: str | None = None
+    category_patterns: tuple[str, ...] = ()
     min_page_length: int = 5000
     data_dir: Path = Path("data")
     results_dir: Path = Path("results/pipeline")
@@ -25,15 +26,26 @@ class PipelineConfig:
         "occupation",
     )
     output_format: str = "csv"
+    max_depth: int | None = None
     dry_run: bool = False
     no_cache: bool = False
     clear_cache: bool = False
+
+    @property
+    def search_mode(self) -> str:
+        """Return 'regex' if patterns provided, else 'bfs'."""
+        return "regex" if self.category_patterns else "bfs"
 
 
 def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     """Parse CLI arguments into PipelineConfig."""
     p = argparse.ArgumentParser(description="Wikipedia category data pipeline")
-    p.add_argument("root_category", help="Root Wikipedia category name (without Category: prefix)")
+    p.add_argument("root_category", nargs="?", default=None,
+                    help="Root Wikipedia category name for BFS mode (without Category: prefix)")
+    p.add_argument("--patterns", nargs="+", default=None,
+                    help="Regex patterns to match category names (default search mode)")
+    p.add_argument("--patterns-file", type=Path, default=None,
+                    help="File with one regex pattern per line")
     p.add_argument("--min-page-length", type=int, default=5000)
     p.add_argument("--data-dir", type=Path, default=Path("data"))
     p.add_argument("--results-dir", type=Path, default=Path("results/pipeline"))
@@ -42,12 +54,26 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     p.add_argument("--claude-model", default="claude-haiku-4-5-20251001")
     p.add_argument("--required-fields", nargs="+", default=["birth_date", "death_date", "nationality", "occupation"])
     p.add_argument("--output-format", choices=["csv", "tsv"], default="csv")
+    p.add_argument("--max-depth", type=int, default=None, help="Max BFS depth (0=root only, None=unlimited)")
     p.add_argument("--dry-run", action="store_true", help="Stop before API calls, report counts")
     p.add_argument("--no-cache", action="store_true", help="Bypass cache read/write")
     p.add_argument("--clear-cache", action="store_true", help="Clear cache before run")
     args = p.parse_args(argv)
+
+    # Collect patterns from --patterns and/or --patterns-file
+    patterns: list[str] = []
+    if args.patterns:
+        patterns.extend(args.patterns)
+    if args.patterns_file:
+        text = args.patterns_file.read_text()
+        patterns.extend(line.strip() for line in text.splitlines() if line.strip())
+
+    if not args.root_category and not patterns:
+        p.error("provide either root_category (BFS mode) or --patterns/--patterns-file (regex mode)")
+
     return PipelineConfig(
         root_category=args.root_category,
+        category_patterns=tuple(patterns),
         min_page_length=args.min_page_length,
         data_dir=args.data_dir,
         results_dir=args.results_dir,
@@ -56,6 +82,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
         claude_model=args.claude_model,
         required_fields=tuple(args.required_fields),
         output_format=args.output_format,
+        max_depth=args.max_depth,
         dry_run=args.dry_run,
         no_cache=args.no_cache,
         clear_cache=args.clear_cache,
