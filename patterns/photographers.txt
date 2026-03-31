@@ -1,0 +1,2 @@
+(?:^|_)photographers?(?:$|_)
+(?:^|_)photojournalists?(?:$|_)

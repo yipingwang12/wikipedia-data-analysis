@@ -1,0 +1,6 @@
+(?:^|_)explorers?(?:$|_)
+(?:^|_)navigators?(?:$|_)
+(?:^|_)mountaineers?(?:$|_)
+(?:^|_)cartographers?(?:$|_)
+(?:^|_)conquistadors?(?:$|_)
+(?:^|_)seafarers?(?:$|_)
