@@ -49,6 +49,8 @@ def load_pickle(cache_path: Path, source_paths: list[Path]) -> object | None:
         expected = meta.source_mtimes.get(p.name)
         if expected is None:
             return None
+        if not p.exists():
+            continue  # source deleted; trust existing cache
         if abs(p.stat().st_mtime - expected) > MTIME_EPSILON:
             return None
     try:

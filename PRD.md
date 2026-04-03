@@ -126,6 +126,38 @@ With cached dumps (~21s load time):
 
 Initial parse (cold cache): ~30 min (one-time cost, shared across all searches)
 
+### Content sourcing benchmarks (2026-04-01)
+
+Three approaches for fetching article text, tested against all 13 bio pattern files (298 patterns, 1,046,545 non-stub articles):
+
+**Category search + filtering** (298 patterns, cached):
+- Cache load: ~21s
+- Regex search: ~267s (298 patterns × 2.6M names — scales linearly with pattern count)
+- Filter: ~49s
+- Total: ~316s
+
+**API fetch** (estimated from rate limits):
+- ~10–20 articles/sec (50/batch, 0.1s rate limit, 2 passes for wikitext+plaintext)
+- 1K articles: ~2 min; 35K: ~30–60 min; 1M: ~14–28 hrs
+- Scales linearly with article count; efficient for small runs
+
+**Local dump read** (106 GB uncompressed XML via `iterparse`):
+- Full scan required regardless of article count (fixed cost)
+- bz2 streaming: too slow (Python single-threaded decompression bottleneck)
+- Uncompressed XML: still slow — `iterparse` on 106 GB is CPU-bound on XML parsing; 1000-article `--limit` run did not complete within ~10 min
+- Decompression (bz2 → XML): ~5 min with `lbzip2` (14 cores), ~30–60 min with single-threaded `bzip2`
+
+**Conclusions**:
+- API is fastest for small/medium runs (<100K articles)
+- Dump reader needs optimization before it's viable — `iterparse` is the bottleneck, not I/O. Options: `lxml.etree.iterparse` (C-speed), SAX parser, or pre-built page-offset index
+- 298-pattern regex search (~267s) also needs optimization for all-bio runs — combine into single compiled regex or pre-filter
+
+**Disk usage** (data/):
+- SQL dump caches: ~1.8 GB (catid_map, page_meta, lt_map, parsed_catlinks)
+- Article dump (bz2): ~23 GB
+- Article dump (uncompressed XML): ~106 GB
+- Raw SQL dumps: deleted (caches sufficient for pipeline)
+
 ## Tests
 
 221 tests. Run: `.venv/bin/python -m pytest tests/ -v`

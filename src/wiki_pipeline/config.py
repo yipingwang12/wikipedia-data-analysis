@@ -6,6 +6,9 @@ import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 
+BIO_PATTERNS_DIR = Path("patterns")
+GEO_PATTERNS_DIR = Path("patterns/geo")
+
 
 @dataclass(frozen=True)
 class PipelineConfig:
@@ -31,6 +34,9 @@ class PipelineConfig:
     dry_run: bool = False
     no_cache: bool = False
     clear_cache: bool = False
+    download_articles: bool = False
+    use_api: bool = False
+    limit: int | None = None
 
     @property
     def search_mode(self) -> str:
@@ -62,6 +68,14 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     p.add_argument("--dry-run", action="store_true", help="Stop before API calls, report counts")
     p.add_argument("--no-cache", action="store_true", help="Bypass cache read/write")
     p.add_argument("--clear-cache", action="store_true", help="Clear cache before run")
+    p.add_argument("--download-articles", action="store_true",
+                    help="Download full article content dump (enwiki-latest-pages-articles.xml.bz2, ~22 GB)")
+    p.add_argument("--use-api", action="store_true",
+                    help="Fetch article content via MediaWiki API instead of local dump (default: read from dump)")
+    p.add_argument("--limit", type=int, default=None,
+                    help="Stop after extracting N articles (useful for testing)")
+    p.add_argument("--all", action="store_true",
+                    help="Load all pattern files for the extraction mode (default when using dump reader in bio mode)")
     args = p.parse_args(argv)
 
     # Collect patterns from --patterns and/or --patterns-file
@@ -72,8 +86,19 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
         text = args.patterns_file.read_text()
         patterns.extend(line.strip() for line in text.splitlines() if line.strip())
 
-    if not args.root_category and not patterns:
-        p.error("provide either root_category (BFS mode) or --patterns/--patterns-file (regex mode)")
+    # Default to --all when using dump reader in bio mode with no explicit patterns
+    use_all = args.all or (not args.use_api and not patterns and not args.root_category
+                           and not args.download_articles)
+    if use_all and not patterns:
+        patterns_dir = GEO_PATTERNS_DIR if args.extraction_mode == "geo" else BIO_PATTERNS_DIR
+        for pat_file in sorted(patterns_dir.glob("*.txt")):
+            text = pat_file.read_text()
+            patterns.extend(line.strip() for line in text.splitlines() if line.strip())
+        if patterns:
+            print(f"Loaded {len(patterns)} patterns from {patterns_dir}", flush=True)
+
+    if not args.root_category and not patterns and not args.download_articles:
+        p.error("provide either root_category (BFS mode), --patterns/--patterns-file (regex mode), or --download-articles")
 
     # Default required_fields depends on extraction mode
     if args.required_fields is not None:
@@ -99,4 +124,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
         dry_run=args.dry_run,
         no_cache=args.no_cache,
         clear_cache=args.clear_cache,
+        download_articles=args.download_articles,
+        use_api=args.use_api,
+        limit=args.limit,
     )
