@@ -12,12 +12,13 @@ GEO_PATTERNS_DIR = Path("patterns/geo")
 
 @dataclass(frozen=True)
 class PipelineConfig:
+    wiki: str = "simplewiki"
     root_category: str | None = None
     category_patterns: tuple[str, ...] = ()
     min_page_length: int = 5000
     data_dir: Path = Path("data")
     results_dir: Path = Path("results/pipeline")
-    dump_base_url: str = "https://dumps.wikimedia.org/enwiki/latest"
+    dump_base_url: str = "https://dumps.wikimedia.org/simplewiki/latest"
     wiki_api_url: str = "https://en.wikipedia.org/w/api.php"
     api_batch_size: int = 50
     api_rate_limit_s: float = 0.1
@@ -36,6 +37,7 @@ class PipelineConfig:
     clear_cache: bool = False
     download_articles: bool = False
     use_api: bool = False
+    use_multistream: bool = True
     limit: int | None = None
 
     @property
@@ -54,6 +56,8 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     p.add_argument("--patterns-file", type=Path, default=None,
                     help="File with one regex pattern per line")
     p.add_argument("--min-page-length", type=int, default=5000)
+    p.add_argument("--wiki", default="enwiki",
+                    help="Wiki project name (e.g., enwiki, simplewiki)")
     p.add_argument("--data-dir", type=Path, default=Path("data"))
     p.add_argument("--results-dir", type=Path, default=Path("results/pipeline"))
     p.add_argument("--api-batch-size", type=int, default=50)
@@ -72,6 +76,8 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                     help="Download full article content dump (enwiki-latest-pages-articles.xml.bz2, ~22 GB)")
     p.add_argument("--use-api", action="store_true",
                     help="Fetch article content via MediaWiki API instead of local dump (default: read from dump)")
+    p.add_argument("--no-multistream", action="store_true",
+                    help="Use legacy full-scan dump reader instead of multistream index (default: multistream)")
     p.add_argument("--limit", type=int, default=None,
                     help="Stop after extracting N articles (useful for testing)")
     p.add_argument("--all", action="store_true",
@@ -108,9 +114,14 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     else:
         required_fields = ("birth_date", "death_date", "nationality", "occupation")
 
+    wiki = args.wiki
+    dump_base_url = f"https://dumps.wikimedia.org/{wiki}/latest"
+
     return PipelineConfig(
+        wiki=wiki,
         root_category=args.root_category,
         category_patterns=tuple(patterns),
+        dump_base_url=dump_base_url,
         min_page_length=args.min_page_length,
         data_dir=args.data_dir,
         results_dir=args.results_dir,
@@ -126,5 +137,6 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
         clear_cache=args.clear_cache,
         download_articles=args.download_articles,
         use_api=args.use_api,
+        use_multistream=not args.no_multistream,
         limit=args.limit,
     )

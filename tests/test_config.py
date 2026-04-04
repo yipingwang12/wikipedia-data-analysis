@@ -89,9 +89,15 @@ class TestParseArgs:
         assert cfg.no_cache is True
         assert cfg.clear_cache is False
 
-    def test_no_args_exits(self):
+    def test_no_args_loads_all_bio_patterns(self):
+        cfg = parse_args([])
+        assert cfg.root_category is None
+        assert len(cfg.category_patterns) > 0
+        assert cfg.search_mode == "regex"
+
+    def test_no_args_with_use_api_exits(self):
         with pytest.raises(SystemExit):
-            parse_args([])
+            parse_args(["--use-api"])
 
     def test_patterns_flag(self):
         cfg = parse_args(["--patterns", "French.*paint", "Italian.*sculpt"])
@@ -116,6 +122,24 @@ class TestParseArgs:
         pfile.write_text("from_file\n")
         cfg = parse_args(["--patterns", "from_cli", "--patterns-file", str(pfile)])
         assert cfg.category_patterns == ("from_cli", "from_file")
+
+    def test_multistream_default_on(self):
+        cfg = parse_args(["Cat"])
+        assert cfg.use_multistream is True
+
+    def test_no_multistream_flag(self):
+        cfg = parse_args(["Cat", "--no-multistream"])
+        assert cfg.use_multistream is False
+
+    def test_wiki_default_enwiki(self):
+        cfg = parse_args(["Cat"])
+        assert cfg.wiki == "enwiki"
+        assert "enwiki" in cfg.dump_base_url
+
+    def test_wiki_simplewiki(self):
+        cfg = parse_args(["Cat", "--wiki", "simplewiki"])
+        assert cfg.wiki == "simplewiki"
+        assert "simplewiki" in cfg.dump_base_url
 
     def test_extraction_mode_bio_default_fields(self):
         cfg = parse_args(["Cat"])

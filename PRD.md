@@ -45,11 +45,13 @@ python scripts/transform_to_gadm.py --csv results/geo/regex_results.csv --gadm-d
 
 ### Flags
 
+- `--wiki NAME` — wiki project (default: simplewiki; use `enwiki` for full English Wikipedia)
 - `--patterns REGEX [REGEX ...]` — regex patterns to match category names (case-insensitive)
 - `--patterns-file PATH` — file with one regex pattern per line (combinable with `--patterns`)
 - `--extraction-mode bio|geo` — biographical (default) or geographic field extraction
 - `--required-fields FIELD [...]` — override default fields (auto-set by extraction mode)
 - `--max-depth N` — limit BFS to N levels below root (default: unlimited)
+- `--no-multistream` — use legacy full-scan dump reader instead of multistream index
 - `--no-cache` — bypass cache read/write, force full re-parse
 - `--clear-cache` — delete cached files before run
 
@@ -93,13 +95,14 @@ Biographical patterns use word-boundary anchors (`(?:^|_)..(?:$|_)`). Geographic
 
 ```
 src/wiki_pipeline/
-  config.py          # frozen dataclass + argparse CLI, search_mode/extraction_mode
+  config.py          # frozen dataclass + argparse CLI, search_mode/extraction_mode/wiki
   download.py        # streaming download w/ resume + exponential backoff
   sql_parser.py      # streaming MySQL INSERT parser (C-speed str.find)
   category_tree.py   # parse_page_dump, parse_category_links, bfs_from_root,
                      # find_categories_by_regex, collect_articles_from_categories
   page_filter.py     # filter_pages (streaming) + filter_pages_from_meta (cached)
   cache.py           # pickle save/load with .meta mtime sidecar
+  dump_reader.py     # multistream index reader (default), legacy full-scan fallback
   pipeline.py        # cache-aware orchestrator (regex + BFS modes)
   wiki_api.py        # MediaWiki API client (batched, rate-limited)
   infobox_parser.py      # mwparserfromhell biographical field extraction
@@ -126,41 +129,38 @@ With cached dumps (~21s load time):
 
 Initial parse (cold cache): ~30 min (one-time cost, shared across all searches)
 
-### Content sourcing benchmarks (2026-04-01)
+### Content sourcing benchmarks
 
-Three approaches for fetching article text, tested against all 13 bio pattern files (298 patterns, 1,046,545 non-stub articles):
+**Multistream index reader** (2026-04-03, simplewiki ~358 MB dump):
+- Uses Wikimedia's multistream bz2 format: independently-compressed blocks with byte-offset index
+- Index load: ~0.5s (551K pages); cached as pickle for instant reload
+- Seeks directly to needed blocks, decompresses only target pages
+- 10 articles: 0.06s; 1,375 articles: 23s; 69,126 articles: 357s (176/s)
+- No decompression to disk required — reads directly from compressed dump
 
-**Category search + filtering** (298 patterns, cached):
-- Cache load: ~21s
-- Regex search: ~267s (298 patterns × 2.6M names — scales linearly with pattern count)
-- Filter: ~49s
-- Total: ~316s
+**Full pipeline run** (2026-04-03, all 13 bio patterns → simplewiki):
+- Cache load: ~31s; regex search (298 patterns): ~292s; multistream read: ~357s; extraction: ~330s
+- Total: ~17 min for 69,126 articles (6.6% of 1,046,545 enwiki matches found in simplewiki)
+- Fill rates: birth_date 70%, death_date 35%, nationality 68%, occupation 55%
+
+**Legacy full-scan reader** (2026-04-01, enwiki 106 GB uncompressed):
+- `iterparse` on 106 GB is CPU-bound; 1000-article run did not complete in ~10 min
+- Retained as `--no-multistream` fallback
 
 **API fetch** (estimated from rate limits):
 - ~10–20 articles/sec (50/batch, 0.1s rate limit, 2 passes for wikitext+plaintext)
 - 1K articles: ~2 min; 35K: ~30–60 min; 1M: ~14–28 hrs
 - Scales linearly with article count; efficient for small runs
 
-**Local dump read** (106 GB uncompressed XML via `iterparse`):
-- Full scan required regardless of article count (fixed cost)
-- bz2 streaming: too slow (Python single-threaded decompression bottleneck)
-- Uncompressed XML: still slow — `iterparse` on 106 GB is CPU-bound on XML parsing; 1000-article `--limit` run did not complete within ~10 min
-- Decompression (bz2 → XML): ~5 min with `lbzip2` (14 cores), ~30–60 min with single-threaded `bzip2`
-
-**Conclusions**:
-- API is fastest for small/medium runs (<100K articles)
-- Dump reader needs optimization before it's viable — `iterparse` is the bottleneck, not I/O. Options: `lxml.etree.iterparse` (C-speed), SAX parser, or pre-built page-offset index
-- 298-pattern regex search (~267s) also needs optimization for all-bio runs — combine into single compiled regex or pre-filter
-
 **Disk usage** (data/):
 - SQL dump caches: ~1.8 GB (catid_map, page_meta, lt_map, parsed_catlinks)
-- Article dump (bz2): ~23 GB
-- Article dump (uncompressed XML): ~106 GB
-- Raw SQL dumps: deleted (caches sufficient for pipeline)
+- Multistream dump (simplewiki): ~358 MB + ~5 MB index
+- Multistream dump (enwiki): ~22 GB + ~250 MB index
+- Legacy article dump (enwiki bz2): ~23 GB; uncompressed: ~106 GB
 
 ## Tests
 
-221 tests. Run: `.venv/bin/python -m pytest tests/ -v`
+263 tests. Run: `.venv/bin/python -m pytest tests/ -v`
 
 ## Extraction Modes
 
@@ -246,6 +246,8 @@ wikipedia-maps/
 - **Single-pass page dump** — produces both catid_map (ns=14) and page_meta (ns=0, non-redirect) in one pass
 - **Mtime sidecar validation** — `.meta` files track source dump mtimes; stale cache auto-invalidated without loading full pickle
 - **Streaming SQL parser** — `str.find()` scanning for multi-hundred-MB INSERT lines, O(1) memory per row
+- **Multistream index reader** — seeks directly into compressed bz2 blocks via byte-offset index; reads only target pages instead of scanning entire dump. Default over legacy full-scan.
+- **Wiki-agnostic filenames** — dump filenames parameterized by `--wiki` (e.g., simplewiki, enwiki); SQL dump caches are wiki-independent
 - **Three-tier extraction** — infobox → NLP regex → LLM fallback → None; NLP tier eliminates most LLM calls at zero cost
 - **Word-boundary anchored patterns** — prevent false positives from substring matches (e.g., `count` in "county")
 - **Dual extraction modes** — bio/geo share pipeline infrastructure; only infobox parser and default fields differ

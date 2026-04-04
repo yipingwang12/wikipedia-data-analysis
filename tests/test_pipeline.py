@@ -20,6 +20,7 @@ def _config(tmp_path: Path, **overrides) -> PipelineConfig:
         dry_run=False,
         no_cache=True,
         clear_cache=False,
+        use_api=True,
     )
     defaults.update(overrides)
     return PipelineConfig(**defaults)

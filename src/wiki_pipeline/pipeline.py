@@ -19,7 +19,14 @@ from .category_tree import (
 )
 from .config import PipelineConfig, parse_args
 from .download import download_dump
-from .dump_reader import read_articles_from_dump, resolve_dump_path
+from .dump_reader import (
+    _article_dump_name,
+    load_multistream_index,
+    read_articles_from_dump,
+    read_articles_multistream,
+    resolve_dump_path,
+    resolve_multistream_paths,
+)
 from .geo_infobox_parser import extract_geo_infobox_fields
 from .infobox_parser import extract_infobox_fields
 from .llm_extractor import LlmExtractor
@@ -30,13 +37,12 @@ from .wiki_api import WikiApiClient
 
 logger = logging.getLogger(__name__)
 
-DUMP_FILES = {
-    "page": "enwiki-latest-page.sql.gz",
-    "categorylinks": "enwiki-latest-categorylinks.sql.gz",
-    "linktarget": "enwiki-latest-linktarget.sql.gz",
-}
-
-ARTICLES_DUMP = "enwiki-latest-pages-articles.xml.bz2"
+def _sql_dump_files(wiki: str) -> dict[str, str]:
+    return {
+        "page": f"{wiki}-latest-page.sql.gz",
+        "categorylinks": f"{wiki}-latest-categorylinks.sql.gz",
+        "linktarget": f"{wiki}-latest-linktarget.sql.gz",
+    }
 
 CACHE_KEYS = ("catid_map", "page_meta", "lt_map", "parsed_catlinks")
 
@@ -59,7 +65,7 @@ def _download_and_parse(config: PipelineConfig) -> tuple[
 
     if use_cache:
         dump_paths_for_cache = {
-            key: config.data_dir / filename for key, filename in DUMP_FILES.items()
+            key: config.data_dir / filename for key, filename in _sql_dump_files(config.wiki).items()
         }
         page_src = [dump_paths_for_cache["page"]]
         lt_src = [dump_paths_for_cache["linktarget"]]
@@ -78,7 +84,7 @@ def _download_and_parse(config: PipelineConfig) -> tuple[
     else:
         # Download dumps only when cache miss
         dump_paths: dict[str, Path] = {}
-        for key, filename in DUMP_FILES.items():
+        for key, filename in _sql_dump_files(config.wiki).items():
             url = f"{config.dump_base_url}/{filename}"
             dest = config.data_dir / filename
             dump_paths[key] = download_dump(url, dest)
@@ -151,12 +157,44 @@ def _output_name(config: PipelineConfig) -> str:
     return "regex_results"
 
 
+def _load_multistream_index(
+    config: PipelineConfig, index_path: Path
+) -> dict[int, int]:
+    """Load multistream index, using pickle cache when available."""
+    use_cache = not config.no_cache
+    cdir = cache_dir(config.data_dir)
+    if use_cache:
+        cached = load_pickle(cdir / "multistream_index.pkl", [index_path])
+        if cached is not None:
+            print(f"  Loaded multistream index from cache ({len(cached)} pages)", flush=True)
+            return cached
+    index = load_multistream_index(index_path)
+    if use_cache:
+        save_pickle(index, cdir / "multistream_index.pkl", [index_path])
+        print("  Saved multistream index to cache", flush=True)
+    return index
+
+
 def _download_articles_dump(config: PipelineConfig) -> Path:
-    """Download the full article content dump (~22 GB)."""
-    url = f"{config.dump_base_url}/{ARTICLES_DUMP}"
-    dest = config.data_dir / ARTICLES_DUMP
-    print(f"Downloading article content dump: {ARTICLES_DUMP}", flush=True)
-    return download_dump(url, dest)
+    """Download article content dump. Multistream by default."""
+    if config.use_multistream:
+        index_name = _article_dump_name(config.wiki, "multistream_index")
+        index_url = f"{config.dump_base_url}/{index_name}"
+        index_dest = config.data_dir / index_name
+        print(f"Downloading multistream index: {index_name}", flush=True)
+        download_dump(index_url, index_dest)
+
+        dump_name = _article_dump_name(config.wiki, "multistream")
+        dump_url = f"{config.dump_base_url}/{dump_name}"
+        dump_dest = config.data_dir / dump_name
+        print(f"Downloading multistream dump: {dump_name}", flush=True)
+        return download_dump(dump_url, dump_dest)
+    else:
+        legacy_name = _article_dump_name(config.wiki, "bz2")
+        url = f"{config.dump_base_url}/{legacy_name}"
+        dest = config.data_dir / legacy_name
+        print(f"Downloading article content dump: {legacy_name}", flush=True)
+        return download_dump(url, dest)
 
 
 def run(config: PipelineConfig) -> Path | None:
@@ -204,12 +242,20 @@ def run(config: PipelineConfig) -> Path | None:
         wikitext_map = api.fetch_wikitext_batch(titles)
         plaintext_map = api.fetch_plaintext_batch(titles)
     else:
-        dump_path = resolve_dump_path(config.data_dir)
-        print(f"  Reading from {dump_path.name}", flush=True)
         page_id_set = {p.page_id for p in pages}
-        wikitext_map, plaintext_map = read_articles_from_dump(
-            dump_path, page_id_set, limit=config.limit,
-        )
+        if config.use_multistream:
+            dump_path, index_path = resolve_multistream_paths(config.data_dir, config.wiki)
+            index = _load_multistream_index(config, index_path)
+            print(f"  Reading via multistream index ({len(page_id_set)} articles)", flush=True)
+            wikitext_map, plaintext_map = read_articles_multistream(
+                dump_path, index, page_id_set, limit=config.limit,
+            )
+        else:
+            dump_path = resolve_dump_path(config.data_dir, config.wiki)
+            print(f"  Reading from {dump_path.name}", flush=True)
+            wikitext_map, plaintext_map = read_articles_from_dump(
+                dump_path, page_id_set, limit=config.limit,
+            )
 
     # Extract fields: infobox → NLP regex → LLM fallback
     llm = LlmExtractor(model=config.claude_model)
