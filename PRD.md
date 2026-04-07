@@ -45,7 +45,7 @@ python scripts/transform_to_gadm.py --csv results/geo/regex_results.csv --gadm-d
 
 ### Flags
 
-- `--wiki NAME` — wiki project (default: simplewiki; use `enwiki` for full English Wikipedia)
+- `--wiki NAME` — wiki project (default: simplewiki; e.g., `enwiki` for full English Wikipedia)
 - `--patterns REGEX [REGEX ...]` — regex patterns to match category names (case-insensitive)
 - `--patterns-file PATH` — file with one regex pattern per line (combinable with `--patterns`)
 - `--extraction-mode bio|geo` — biographical (default) or geographic field extraction
@@ -143,10 +143,6 @@ Initial parse (cold cache): ~30 min (one-time cost, shared across all searches)
 - Total: ~17 min for 69,126 articles (6.6% of 1,046,545 enwiki matches found in simplewiki)
 - Fill rates: birth_date 70%, death_date 35%, nationality 68%, occupation 55%
 
-**Legacy full-scan reader** (2026-04-01, enwiki 106 GB uncompressed):
-- `iterparse` on 106 GB is CPU-bound; 1000-article run did not complete in ~10 min
-- Retained as `--no-multistream` fallback
-
 **API fetch** (estimated from rate limits):
 - ~10–20 articles/sec (50/batch, 0.1s rate limit, 2 passes for wikitext+plaintext)
 - 1K articles: ~2 min; 35K: ~30–60 min; 1M: ~14–28 hrs
@@ -156,7 +152,6 @@ Initial parse (cold cache): ~30 min (one-time cost, shared across all searches)
 - SQL dump caches: ~1.8 GB (catid_map, page_meta, lt_map, parsed_catlinks)
 - Multistream dump (simplewiki): ~358 MB + ~5 MB index
 - Multistream dump (enwiki): ~22 GB + ~250 MB index
-- Legacy article dump (enwiki bz2): ~23 GB; uncompressed: ~106 GB
 
 ## Tests
 
