@@ -1,4 +1,4 @@
-"""Tests for transform_to_gadm — CSV → wikipedia.json with GADM join."""
+"""Tests for wiki_pipeline.transform — CSV → wikipedia.json with GADM join."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.transform_to_gadm import build_gadm_index, normalize, transform
+from wiki_pipeline.transform import build_gadm_index, normalize, transform
 
 
 @pytest.fixture
