@@ -218,20 +218,37 @@ Implemented on the `feature/wikipedia-integration` branch of [global-geo-atlas](
 
 Graceful degradation: missing `wikipedia.json` returns `{}`, missing keys return `null`, tooltip rows simply omitted.
 
-### Future: Unified Monorepo
+### Future: Dagster Workspace Orchestration
 
-Goal: run both pipelines (Wikipedia extraction + map app) from a single directory with shared orchestration. Proposed structure:
+Goal: orchestrate data flow across a multi-product polyglot workspace via Dagster software-defined assets. Repos stay independent — no monorepo migration, no git subtree.
 
-```
-wikipedia-maps/
-├── wikipedia-pipeline/      # this repo (git subtree)
-├── global-geo-atlas/        # map app repo (git subtree)
-└── integration/
-    ├── config.py            # per-country settings: pattern file, join fields, GADM paths
-    └── run.py               # orchestrator: pipeline → transform → place per country
-```
+**Workspace scope (planned):**
+- Products: wikipedia-data-analysis, global-geo-atlas, doc2md, productivity-guardian, email-review-documents
+- ~8 data pipelines feeding global-geo-atlas: GADM, OSM (Geofabrik), HydroRIVERS, Natural Earth, RESOLVE Ecoregions, WorldPop, Wikipedia, plus future sources
+- Loose coupling primarily via data exchange; potential shared library code later
 
-`run.py` would iterate countries from `config.py`, invoke the Wikipedia pipeline with the appropriate geo pattern file, transform CSV → `wikipedia.json`, and place output in the map app's `data/{country-id}/` directory. Supports `--country {id}` for single-country runs and `--all` for batch.
+**Why Dagster (not Bazel/Nx/Moon/Make/custom orchestrator):**
+- Software-defined assets model fits per-country data files exactly — each `wikipedia.json`, `worldpop.json`, etc. is one asset, with declared upstream inputs
+- **Code locations** let each repo register its assets independently — no unified codebase, no history merge, repos remain publishable on their own
+- **Per-country partitions** give `--country {id}` and `--all` essentially for free, with parallelism + retries + per-partition status
+- **Caching**: skip re-extraction when upstream Wikipedia dump (or OSM PBF, GADM release) is unchanged
+- **Lineage UI** shows freshness across ~8 pipelines × 199 countries (~1,600 logical units)
+- global-geo-atlas build itself becomes a downstream asset depending on all data assets — one command rebuilds only what's stale
+- Published, accepted pattern (Mapbox, Drizly, Prezi, ShopRunner); the asset-oriented model is the modern alternative to Airflow's task-oriented model
+
+**Migration path (incremental, reversible):**
+
+1. **Workspace skeleton first** — top-level `~/Documents/workspace/` repo with `mise.toml` (shared Python/Node versions), `Taskfile.yml` (cross-repo tasks: `task atlas:build`, `task wiki:extract`), `repos.yaml` (sibling-checkout manifest). One afternoon, pure upside, no lock-in.
+2. **Wikipedia pipeline as first Dagster code location** — partition assets by country id; upstream = `enwiki` dump asset (mtime-tracked); downstream = `wikipedia.json` written into `global-geo-atlas/data/{id}/`
+3. **Add code locations per repo as data flow grows** — each sibling repo registers its assets without giving up independence
+4. **Cross-repo edges** — e.g., `doc2md` output → `email-review-documents` input modeled as plain asset dependencies
+5. **Defer true monorepo migration** (Moon/Pants/Bazel) until shared *code* (not data) becomes painful. Not before.
+
+**Rejected alternative — git subtree + custom country-loop orchestrator:** acceptable at 2 projects; at 5–8 it reinvents Dagster (parameterization, retries, caching, dependency graph, observability) badly. Custom Python orchestrator becomes its own maintenance burden.
+
+**Why not Nx/Turborepo:** JS/TS-first; Python and shell pipelines are second-class via custom executors. Wrong abstraction for data-pipeline-heavy polyglot workspace.
+
+**Why not Bazel/Pants/Moon yet:** designed for code that compiles and links. Pipelines here are fetch-from-internet → GDAL/osmium → write JSON; build-system hermeticity rules fight non-hermetic data sources. Revisit only if shared library code becomes substantial.
 
 ## Key Design Decisions
 
