@@ -166,8 +166,13 @@ class TestParseArgs:
         assert cfg.wiki_api_url == "https://fr.wikipedia.org/w/api.php"
         assert "frwiki" in cfg.dump_base_url
 
-    def test_extraction_mode_bio_default_fields(self):
+    def test_extraction_mode_auto_default(self):
         cfg = parse_args(["Cat"])
+        assert cfg.extraction_mode == "auto"
+        assert "birth_date" in cfg.required_fields
+
+    def test_extraction_mode_bio_explicit(self):
+        cfg = parse_args(["Cat", "--extraction-mode", "bio"])
         assert cfg.extraction_mode == "bio"
         assert "birth_date" in cfg.required_fields
 

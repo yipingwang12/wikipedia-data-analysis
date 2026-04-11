@@ -160,14 +160,17 @@ def normalize_date_with_note(raw: str | None) -> tuple[str | None, str | None]:
         return None, None
     s = raw.strip()
 
-    # Decade approximations: "1900s", "early 1960s", "late 1950s"
-    m = re.match(r"^(early|late|mid)?\s*(\d{3,4})s$", s, re.I)
+    # Strip circa prefix for matching, but preserve in note
+    s_clean = re.sub(r"^[Cc]\.?\s*", "", s).strip()
+
+    # Decade approximations: "1900s", "early 1960s", "late 1950s", "c. 1900s"
+    m = re.match(r"^(early|late|mid)?\s*(\d{3,4})s$", s_clean, re.I)
     if m:
         qualifier, decade = m.group(1), int(m.group(2))
         return f"{decade}-01-01", f"~{s}"
 
-    # Century references: "7 century", "19-century", "20-century"
-    m = re.match(r"^(\d{1,2})(?:st|nd|rd|th)?[- ]?century$", s, re.I)
+    # Century references: "7 century", "19-century", "c. 7th century"
+    m = re.match(r"^(\d{1,2})(?:st|nd|rd|th)?[- ]?century$", s_clean, re.I)
     if m:
         century = int(m.group(1))
         year = (century - 1) * 100 + 1
@@ -292,7 +295,11 @@ def normalize_date(raw: str | None) -> str | None:
     if bc:
         return f"{circa}{s}{bc}" if s else None
 
-    return s if s else None
+    # Drop values that are clearly not dates (no digits, or too short/nonsensical)
+    if not s or not re.search(r"\d", s):
+        return None
+
+    return s
 
 
 # Keep private alias for internal use

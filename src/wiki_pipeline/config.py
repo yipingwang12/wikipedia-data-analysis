@@ -71,8 +71,10 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     p.add_argument("--api-batch-size", type=int, default=50)
     p.add_argument("--api-rate-limit", type=float, default=0.1)
     p.add_argument("--claude-model", default="claude-haiku-4-5-20251001")
-    p.add_argument("--extraction-mode", choices=["bio", "geo"], default="bio",
-                    help="Extraction mode: bio (biographical) or geo (geographic)")
+    p.add_argument("--extraction-mode",
+                    choices=["bio", "geo", "battle", "exploration", "astronomy", "biology", "math", "auto"],
+                    default="auto",
+                    help="Extraction mode (default: auto-detect from pattern file)")
     p.add_argument("--required-fields", nargs="+", default=None,
                     help="Fields to extract (default depends on extraction mode)")
     p.add_argument("--output-format", choices=["xlsx", "csv", "tsv"], default="xlsx")
@@ -120,12 +122,20 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
         p.error("provide either root_category (BFS mode), --patterns/--patterns-file (regex mode), or --download-articles")
 
     # Default required_fields depends on extraction mode
+    _MODE_FIELDS = {
+        "bio": ("birth_date", "death_date", "nationality", "occupation"),
+        "geo": ("population", "area_km2", "elevation_m", "subdivision_name", "subdivision_type"),
+        "battle": ("date", "location", "belligerents", "result", "casualties", "commanders"),
+        "exploration": ("date", "destination", "origin", "crew", "mission_type", "status"),
+        "astronomy": ("type", "distance", "mass", "radius", "constellation", "discovery_date", "orbital_period", "rotational_period"),
+        "biology": ("type", "scientific_name", "conservation_status", "habitat", "distribution"),
+        "math": ("field", "year_discovered", "discoverer", "related_to"),
+        "auto": ("birth_date", "death_date", "nationality", "occupation"),
+    }
     if args.required_fields is not None:
         required_fields = tuple(args.required_fields)
-    elif args.extraction_mode == "geo":
-        required_fields = ("population", "area_km2", "elevation_m", "subdivision_name", "subdivision_type")
     else:
-        required_fields = ("birth_date", "death_date", "nationality", "occupation")
+        required_fields = _MODE_FIELDS.get(args.extraction_mode, _MODE_FIELDS["bio"])
 
     wiki = args.wiki
     lang = wiki_to_lang(wiki)

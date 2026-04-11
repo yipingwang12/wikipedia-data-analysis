@@ -440,6 +440,12 @@ class TestNormalizeDateWithNote:
     def test_century_20(self):
         assert normalize_date_with_note("20-century") == ("1901-01-01", "~20-century")
 
+    def test_circa_century(self):
+        assert normalize_date_with_note("c. 7th century") == ("0601-01-01", "~c. 7th century")
+
+    def test_circa_decade(self):
+        assert normalize_date_with_note("c. 1900s") == ("1900-01-01", "~c. 1900s")
+
     def test_regular_date_no_note(self):
         assert normalize_date_with_note("1840-11-14") == ("1840-11-14", None)
 

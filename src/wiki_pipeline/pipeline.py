@@ -27,6 +27,7 @@ from .dump_reader import (
     resolve_dump_path,
     resolve_multistream_paths,
 )
+from .extractors import EXTRACTOR_REGISTRY
 from .geo_infobox_parser import extract_geo_infobox_fields
 from .infobox_parser import extract_infobox_fields
 from .llm_extractor import LlmExtractor
@@ -257,40 +258,73 @@ def run(config: PipelineConfig) -> Path | None:
                 dump_path, page_id_set, limit=config.limit,
             )
 
-    # Extract fields: infobox → NLP regex → LLM fallback
-    llm = LlmExtractor(model=config.claude_model)
-    all_records: dict[str, dict[str, str | int | None]] = {}  # title → record
-    nlp_fills = 0
-    llm_calls = 0
-    title_to_length = {p.title.replace("_", " "): p.length for p in pages}
+    # Resolve extractor function for a given mode or pattern file stem
+    _MODE_EXTRACTORS = {
+        "bio": extract_infobox_fields,
+        "geo": extract_geo_infobox_fields,
+    }
+    for stem, (fn, _) in EXTRACTOR_REGISTRY.items():
+        # Map pattern stems to extraction mode names
+        _stem_to_mode = {
+            "battles_wars_conflicts": "battle",
+            "explorations_voyages_spacecraft": "exploration",
+            "astronomy": "astronomy",
+            "biology": "biology",
+            "mathematics_statistics": "math",
+        }
+    for stem, mode in _stem_to_mode.items():
+        _MODE_EXTRACTORS[mode] = EXTRACTOR_REGISTRY[stem][0]
 
-    extract_fn = extract_geo_infobox_fields if config.extraction_mode == "geo" else extract_infobox_fields
+    _MODE_FIELDS = {
+        "bio": ("birth_date", "death_date", "nationality", "occupation"),
+        "geo": ("population", "area_km2", "elevation_m", "subdivision_name", "subdivision_type"),
+    }
+    for stem, (_, fields) in EXTRACTOR_REGISTRY.items():
+        _MODE_FIELDS[_stem_to_mode[stem]] = fields
 
-    for title in titles:
+    _STEM_TO_MODE = {
+        **_stem_to_mode,
+        **{s: "bio" for s in (
+            "athletes", "businesspeople", "explorers", "historians",
+            "movie_directors_actors", "musicians_composers", "philosophers",
+            "photographers", "politicians_rulers", "religious_figures",
+            "scientists", "visual_artists", "writers_authors",
+        )},
+        **{s: "geo" for s in (
+            "admin_subdivisions", "populated_places", "geographic_features",
+            "parks_protected", "transportation", "buildings_structures",
+            "historical_cultural", "demographics_economy",
+        )},
+    }
+
+    _DATE_FIELDS = {"birth_date", "death_date", "date", "discovery_date", "year_discovered"}
+
+    def _extract_article(title, extract_fn, required_fields):
         wikitext = wikitext_map.get(title, "")
-        fields = extract_fn(wikitext, config.required_fields)
+        fields = extract_fn(wikitext, required_fields)
 
         has_gaps = any(v is None for v in fields.values())
         if has_gaps and title in plaintext_map:
             fields = extract_from_text(
-                plaintext_map[title], fields, config.required_fields
+                plaintext_map[title], fields, required_fields
             )
-            nlp_fills += 1
 
             has_gaps = any(v is None for v in fields.values())
             if has_gaps:
                 fields = llm.extract_missing(
-                    plaintext_map[title], fields, config.required_fields,
+                    plaintext_map[title], fields, required_fields,
                     lang=wiki_to_lang(config.wiki),
                 )
-                llm_calls += 1
 
         date_notes: dict[str, str | None] = {}
-        for date_field in ("birth_date", "death_date"):
-            if date_field in fields and fields[date_field]:
-                normalized, note = normalize_date_with_note(fields[date_field])
-                fields[date_field] = normalized
-                date_notes[f"{date_field}_note"] = note
+        for date_field in _DATE_FIELDS:
+            if date_field in fields:
+                if fields[date_field]:
+                    normalized, note = normalize_date_with_note(fields[date_field])
+                    fields[date_field] = normalized
+                    date_notes[f"{date_field}_note"] = note
+                else:
+                    date_notes[f"{date_field}_note"] = None
 
         plaintext = plaintext_map.get(title, "")
         record: dict[str, str | int | None] = {
@@ -301,34 +335,52 @@ def run(config: PipelineConfig) -> Path | None:
         record.update(date_notes)
         record["article_bytes"] = title_to_length.get(title, 0)
         record["word_count"] = len(plaintext.split()) if plaintext else 0
-        all_records[title] = record
+        return record
 
-    print(f"Processed {len(all_records)} articles, {nlp_fills} NLP extractions, {llm_calls} LLM calls")
+    llm = LlmExtractor(model=config.claude_model)
+    title_to_length = {p.title.replace("_", " "): p.length for p in pages}
 
-    # Write output — per-pattern-file Excel when groups exist, else single file
-    ext = {"xlsx": "xlsx", "tsv": "tsv"}.get(config.output_format, "csv")
-
+    # Per-pattern-group extraction + output (auto mode with groups)
     if config.pattern_groups and config.output_format == "xlsx":
         all_cat_names = set(catid_map.values())
         output_paths: list[Path] = []
+        total_processed = 0
+
         for stem, group_patterns in config.pattern_groups:
+            mode = _STEM_TO_MODE.get(stem, config.extraction_mode)
+            if mode == "auto":
+                mode = "bio"
+            extract_fn = _MODE_EXTRACTORS.get(mode, extract_infobox_fields)
+            required_fields = _MODE_FIELDS.get(mode, config.required_fields)
+
             matched_cats = find_categories_by_regex(all_cat_names, group_patterns)
             group_ids = collect_articles_from_categories(parsed_catlinks, matched_cats)
             group_pages = filter_pages_from_meta(page_meta, group_ids, config.min_page_length)
-            group_titles = {p.title.replace("_", " ") for p in group_pages}
-            group_records = [all_records[t] for t in sorted(group_titles) if t in all_records]
+            group_titles = sorted({p.title.replace("_", " ") for p in group_pages} & set(wikitext_map.keys()))
+
+            group_records = [_extract_article(t, extract_fn, required_fields) for t in group_titles]
+            total_processed += len(group_records)
 
             output_path = config.results_dir / f"{stem}.xlsx"
             write_excel(group_records, output_path, sheet_name=stem)
             output_paths.append(output_path)
-            print(f"  {stem}: {len(group_records)} articles → {output_path}")
-        print(f"Results written to {len(output_paths)} Excel files in {config.results_dir}")
+            print(f"  {stem} [{mode}]: {len(group_records)} articles → {output_path}")
+
+        print(f"Processed {total_processed} articles across {len(output_paths)} Excel files in {config.results_dir}")
         return config.results_dir
     else:
+        # Single-mode extraction
+        mode = config.extraction_mode if config.extraction_mode != "auto" else "bio"
+        extract_fn = _MODE_EXTRACTORS.get(mode, extract_infobox_fields)
+        all_records: list[dict[str, str | int | None]] = []
+        for title in titles:
+            all_records.append(_extract_article(title, extract_fn, config.required_fields))
+        print(f"Processed {len(all_records)} articles")
+
+        ext = {"xlsx": "xlsx", "tsv": "tsv"}.get(config.output_format, "csv")
         stem = _output_name(config)
         output_path = config.results_dir / f"{stem}.{ext}"
-        records = list(all_records.values())
-        result = write_results(records, output_path, config.output_format)
+        result = write_results(all_records, output_path, config.output_format)
         print(f"Results written to {result}")
         return result
 

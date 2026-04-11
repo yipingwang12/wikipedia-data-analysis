@@ -115,8 +115,10 @@ src/wiki_pipeline/
   dump_reader.py     # multistream index reader (batch I/O, regex plaintext), legacy fallback
   pipeline.py        # cache-aware orchestrator (regex + BFS modes)
   wiki_api.py        # MediaWiki API client (batched, rate-limited)
-  infobox_parser.py      # mwparserfromhell biographical field extraction
-  geo_infobox_parser.py  # mwparserfromhell geographic field extraction
+  infobox_base.py        # shared generic infobox extraction (InfoboxConfig + extract_infobox)
+  infobox_parser.py      # biographical infobox config (person/artist/scientist/etc.)
+  geo_infobox_parser.py  # geographic infobox config (settlement/city/county/etc.)
+  extractors.py          # battle/exploration/astronomy/biology/math infobox configs + registry
   nlp_extractor.py       # regex extraction from first-sentence biographical patterns
   llm_extractor.py       # Claude Haiku fallback for missing fields
   output.py              # Excel/CSV/TSV writer (per-pattern-file xlsx default)
@@ -166,11 +168,13 @@ Initial parse (cold cache): ~30 min (one-time cost, shared across all searches)
 
 ## Tests
 
-328 tests. Run: `.venv/bin/python -m pytest tests/ -v`
+343 tests. Run: `.venv/bin/python -m pytest tests/ -v`
 
 ## Extraction Modes
 
-### Biographical (`--extraction-mode bio`, default)
+All extractors share a generic `extract_infobox()` in `infobox_base.py` — each mode is just a config (infobox names + field aliases) and a one-line wrapper. `--extraction-mode auto` (default) selects the right extractor per pattern file.
+
+### Biographical (`--extraction-mode bio`)
 
 Three-tier field extraction for birth_date, death_date, nationality, occupation:
 
@@ -214,6 +218,41 @@ Approximate dates get a sortable placeholder + note column: decades (`1900s` →
 ### Geographic (`--extraction-mode geo`)
 
 Extracts population, area_km2, elevation_m, subdivision_name, subdivision_type from settlement/city/county/district/place infoboxes. Same three-tier cascade (geo infobox → NLP skipped → LLM fallback). Field aliases map common infobox variants (e.g., `population_total`, `pop` → `population`).
+
+### Battle (`--extraction-mode battle`)
+
+Extracts date, location, belligerents, result, casualties, commanders from `infobox military conflict`/`civilian attack`/`war faction`.
+
+**Known issues:** belligerents/commanders fields contain concatenated names without consistent separators; wikitext list markers (`*`, `----`) leak into multi-value fields; result field can be very long (multi-sentence descriptions).
+
+### Exploration (`--extraction-mode exploration`)
+
+Extracts date, destination, origin, crew, mission_type, status from `infobox spaceflight`/`spacecraft class`/`space station`.
+
+**Known issues:** low fill rates — destination 0% (nested sub-infoboxes stripped), status ~3%. Spaceflight infoboxes use deeply nested template structures not fully handled by the generic extractor.
+
+### Astronomy (`--extraction-mode astronomy`)
+
+Extracts type, distance, mass, radius, constellation, discovery_date, orbital_period, rotational_period from `infobox planet`/`star`/`galaxy`/`nebula`/`comet`/`asteroid`/`minor planet`/`pulsar`.
+
+### Biology (`--extraction-mode biology`)
+
+Extracts type, scientific_name, conservation_status, habitat, distribution from `speciesbox`/`taxobox`/`infobox disease`/`organism`.
+
+**Known issues:** habitat 0% fill (field rarely populated in infoboxes); distribution returns map captions rather than text descriptions.
+
+### Mathematics (`--extraction-mode math`)
+
+Extracts field, year_discovered, discoverer, related_to from `infobox mathematical statement`/`theorem`/`conjecture`/`equation`.
+
+**Known issues:** 0% fill across all fields — math articles on Wikipedia rarely use structured infoboxes; theorems/equations are described in prose only. LLM fallback would help here.
+
+### Known field quality issues (all modes)
+
+- **Bio occupation**: occasionally contains book titles or research descriptions instead of occupations
+- **Bio nationality**: occasionally a country name instead of adjective (e.g., "Cameroon" vs "Cameroonian")
+- **Battle multi-value fields**: names sometimes concatenated without separators; list markers leak through
+- **All modes**: `_clean_value` strips nested templates up to 3 levels but deeply nested structures can leak
 
 ## Map Integration
 
