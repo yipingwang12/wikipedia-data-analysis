@@ -6,7 +6,24 @@ from pathlib import Path
 
 import pytest
 
-from wiki_pipeline.config import PipelineConfig, parse_args
+from wiki_pipeline.config import PipelineConfig, parse_args, wiki_to_lang
+
+
+class TestWikiToLang:
+    def test_enwiki(self):
+        assert wiki_to_lang("enwiki") == "en"
+
+    def test_simplewiki(self):
+        assert wiki_to_lang("simplewiki") == "simple"
+
+    def test_frwiki(self):
+        assert wiki_to_lang("frwiki") == "fr"
+
+    def test_jawiki(self):
+        assert wiki_to_lang("jawiki") == "ja"
+
+    def test_no_wiki_suffix(self):
+        assert wiki_to_lang("something") == "something"
 
 
 class TestPipelineConfig:
@@ -14,7 +31,7 @@ class TestPipelineConfig:
         cfg = PipelineConfig(root_category="Test")
         assert cfg.root_category == "Test"
         assert cfg.min_page_length == 5000
-        assert cfg.output_format == "csv"
+        assert cfg.output_format == "xlsx"
         assert cfg.dry_run is False
         assert cfg.no_cache is False
         assert cfg.clear_cache is False
@@ -135,11 +152,19 @@ class TestParseArgs:
         cfg = parse_args(["Cat"])
         assert cfg.wiki == "enwiki"
         assert "enwiki" in cfg.dump_base_url
+        assert cfg.wiki_api_url == "https://en.wikipedia.org/w/api.php"
 
     def test_wiki_simplewiki(self):
         cfg = parse_args(["Cat", "--wiki", "simplewiki"])
         assert cfg.wiki == "simplewiki"
         assert "simplewiki" in cfg.dump_base_url
+        assert cfg.wiki_api_url == "https://simple.wikipedia.org/w/api.php"
+
+    def test_wiki_frwiki_api_url(self):
+        cfg = parse_args(["Cat", "--wiki", "frwiki"])
+        assert cfg.wiki == "frwiki"
+        assert cfg.wiki_api_url == "https://fr.wikipedia.org/w/api.php"
+        assert "frwiki" in cfg.dump_base_url
 
     def test_extraction_mode_bio_default_fields(self):
         cfg = parse_args(["Cat"])

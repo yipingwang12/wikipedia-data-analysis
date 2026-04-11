@@ -87,24 +87,60 @@ def _clean_value(raw: str, field_name: str) -> str | None:
     return cleaned if cleaned else None
 
 
+_DATE_TEMPLATE_NAMES = {
+    "birth date", "death date", "birth date and age", "death date and age",
+    "birth-date", "death-date", "birth-date and age", "death-date and age",
+    "b-da", "d-da",
+}
+
+_MONTH_MAP = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
 def _resolve_date_template(raw: str) -> str | None:
-    """Extract ISO date from {{birth date|Y|M|D}} style templates."""
-    m = re.search(
-        r"\{\{\s*(?:birth date|death date|birth date and age|death date and age)"
-        r"(?:\s*\|[^|]*)*?"
-        r"\|\s*(\d{4})\s*\|\s*(\d{1,2})\s*\|\s*(\d{1,2})",
-        raw,
-        re.IGNORECASE,
-    )
+    """Extract ISO date from date templates like {{birth date|Y|M|D}} or {{death date and age|3 March 1703|...}}."""
+    parsed = mwparserfromhell.parse(raw)
+    for t in parsed.filter_templates():
+        name = str(t.name).strip().lower()
+        if name not in _DATE_TEMPLATE_NAMES:
+            continue
+        positional = [str(p.value).strip() for p in t.params if str(p.name).strip().isdigit()]
+        if not positional:
+            continue
+
+        # Try numeric Y|M|D: params are individual numbers
+        nums = [p for p in positional if re.fullmatch(r"\d{1,4}", p)]
+        if len(nums) >= 3:
+            year, month, day = nums[0], int(nums[1]), int(nums[2])
+            if 1 <= month <= 12 and 1 <= day <= 31:
+                return f"{year}-{month:02d}-{day:02d}"
+
+        # Try text date in first positional param: "3 March 1703"
+        date = _parse_text_date(positional[0])
+        if date:
+            return date
+
+    return None
+
+
+def _parse_text_date(s: str) -> str | None:
+    """Parse a text date like '3 March 1703' or 'March 3, 1703' to ISO."""
+    s = s.strip()
+    # DMY: "3 March 1703"
+    m = re.match(r"(\d{1,2})\s+(\w+)\s+(\d{3,4})", s)
     if m:
-        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-    # Try {{birth date|Y|M|D|...}} with mf=y or df=y flags before numbers
-    m = re.search(
-        r"\{\{\s*(?:birth date|death date|birth date and age|death date and age)"
-        r"\s*\|.*?(\d{4})\s*\|\s*(\d{1,2})\s*\|\s*(\d{1,2})",
-        raw,
-        re.IGNORECASE,
-    )
+        day, month_name, year = int(m.group(1)), m.group(2).lower(), m.group(3)
+        mm = _MONTH_MAP.get(month_name)
+        if mm:
+            return f"{year}-{mm:02d}-{day:02d}"
+    # MDY: "March 3, 1703"
+    m = re.match(r"(\w+)\s+(\d{1,2}),?\s+(\d{3,4})", s)
     if m:
-        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        month_name, day, year = m.group(1).lower(), int(m.group(2)), m.group(3)
+        mm = _MONTH_MAP.get(month_name)
+        if mm:
+            return f"{year}-{mm:02d}-{day:02d}"
     return None

@@ -17,7 +17,7 @@ from .category_tree import (
     parse_category_links,
     parse_page_dump,
 )
-from .config import PipelineConfig, parse_args
+from .config import PipelineConfig, parse_args, wiki_to_lang
 from .download import download_dump
 from .dump_reader import (
     _article_dump_name,
@@ -30,8 +30,8 @@ from .dump_reader import (
 from .geo_infobox_parser import extract_geo_infobox_fields
 from .infobox_parser import extract_infobox_fields
 from .llm_extractor import LlmExtractor
-from .nlp_extractor import extract_from_text
-from .output import write_results
+from .nlp_extractor import extract_from_text, normalize_date_with_note
+from .output import write_excel, write_results
 from .page_filter import filter_pages_from_meta
 from .wiki_api import WikiApiClient
 
@@ -53,11 +53,11 @@ def _download_and_parse(config: PipelineConfig) -> tuple[
     """Download dumps, load/parse caches, return (catid_map, page_meta, lt_map, parsed_catlinks)."""
     # Cache management
     if config.clear_cache:
-        n = clear_cache(config.data_dir)
+        n = clear_cache(config.data_dir, config.wiki)
         print(f"Cleared {n} cache files", flush=True)
 
     use_cache = not config.no_cache
-    cdir = cache_dir(config.data_dir)
+    cdir = cache_dir(config.data_dir, config.wiki)
 
     # Try loading caches first (works even if source dumps are deleted)
     catid_map = page_meta = lt_map = parsed_catlinks = None
@@ -162,7 +162,7 @@ def _load_multistream_index(
 ) -> dict[int, int]:
     """Load multistream index, using pickle cache when available."""
     use_cache = not config.no_cache
-    cdir = cache_dir(config.data_dir)
+    cdir = cache_dir(config.data_dir, config.wiki)
     if use_cache:
         cached = load_pickle(cdir / "multistream_index.pkl", [index_path])
         if cached is not None:
@@ -259,9 +259,10 @@ def run(config: PipelineConfig) -> Path | None:
 
     # Extract fields: infobox → NLP regex → LLM fallback
     llm = LlmExtractor(model=config.claude_model)
-    records: list[dict[str, str | int | None]] = []
+    all_records: dict[str, dict[str, str | int | None]] = {}  # title → record
     nlp_fills = 0
     llm_calls = 0
+    title_to_length = {p.title.replace("_", " "): p.length for p in pages}
 
     extract_fn = extract_geo_infobox_fields if config.extraction_mode == "geo" else extract_infobox_fields
 
@@ -279,26 +280,57 @@ def run(config: PipelineConfig) -> Path | None:
             has_gaps = any(v is None for v in fields.values())
             if has_gaps:
                 fields = llm.extract_missing(
-                    plaintext_map[title], fields, config.required_fields
+                    plaintext_map[title], fields, config.required_fields,
+                    lang=wiki_to_lang(config.wiki),
                 )
                 llm_calls += 1
 
+        date_notes: dict[str, str | None] = {}
+        for date_field in ("birth_date", "death_date"):
+            if date_field in fields and fields[date_field]:
+                normalized, note = normalize_date_with_note(fields[date_field])
+                fields[date_field] = normalized
+                date_notes[f"{date_field}_note"] = note
+
+        plaintext = plaintext_map.get(title, "")
         record: dict[str, str | int | None] = {
             "page_id": title_to_id.get(title, 0),
             "title": title,
         }
         record.update(fields)
-        records.append(record)
+        record.update(date_notes)
+        record["article_bytes"] = title_to_length.get(title, 0)
+        record["word_count"] = len(plaintext.split()) if plaintext else 0
+        all_records[title] = record
 
-    print(f"Processed {len(records)} articles, {nlp_fills} NLP extractions, {llm_calls} LLM calls")
+    print(f"Processed {len(all_records)} articles, {nlp_fills} NLP extractions, {llm_calls} LLM calls")
 
-    # Write output
-    ext = "tsv" if config.output_format == "tsv" else "csv"
-    stem = _output_name(config)
-    output_path = config.results_dir / f"{stem}.{ext}"
-    result = write_results(records, output_path, config.output_format)
-    print(f"Results written to {result}")
-    return result
+    # Write output — per-pattern-file Excel when groups exist, else single file
+    ext = {"xlsx": "xlsx", "tsv": "tsv"}.get(config.output_format, "csv")
+
+    if config.pattern_groups and config.output_format == "xlsx":
+        all_cat_names = set(catid_map.values())
+        output_paths: list[Path] = []
+        for stem, group_patterns in config.pattern_groups:
+            matched_cats = find_categories_by_regex(all_cat_names, group_patterns)
+            group_ids = collect_articles_from_categories(parsed_catlinks, matched_cats)
+            group_pages = filter_pages_from_meta(page_meta, group_ids, config.min_page_length)
+            group_titles = {p.title.replace("_", " ") for p in group_pages}
+            group_records = [all_records[t] for t in sorted(group_titles) if t in all_records]
+
+            output_path = config.results_dir / f"{stem}.xlsx"
+            write_excel(group_records, output_path, sheet_name=stem)
+            output_paths.append(output_path)
+            print(f"  {stem}: {len(group_records)} articles → {output_path}")
+        print(f"Results written to {len(output_paths)} Excel files in {config.results_dir}")
+        return config.results_dir
+    else:
+        stem = _output_name(config)
+        output_path = config.results_dir / f"{stem}.{ext}"
+        records = list(all_records.values())
+        result = write_results(records, output_path, config.output_format)
+        print(f"Results written to {result}")
+        return result
 
 
 def main() -> None:

@@ -12,14 +12,21 @@ logger = logging.getLogger(__name__)
 
 class LlmExtractor:
     def __init__(self, model: str = "claude-haiku-4-5-20251001"):
-        self.client = anthropic.Anthropic()
+        self._client = None
         self.model = model
+
+    @property
+    def client(self) -> anthropic.Anthropic:
+        if self._client is None:
+            self._client = anthropic.Anthropic()
+        return self._client
 
     def extract_missing(
         self,
         plain_text: str,
         existing: dict[str, str | None],
         required_fields: tuple[str, ...] | list[str],
+        lang: str = "en",
     ) -> dict[str, str | None]:
         """Fill in None-valued fields using Claude Haiku on truncated plain text.
 
@@ -30,8 +37,9 @@ class LlmExtractor:
             return dict(existing)
 
         truncated = plain_text[:3000]
+        lang_hint = " The text may be in a non-English language." if lang != "en" else ""
         prompt = (
-            f"Extract these fields from the biography text below. "
+            f"Extract these fields from the biography text below.{lang_hint} "
             f"Return ONLY a JSON object with these keys: {', '.join(missing)}. "
             f"Use null for any field you cannot determine.\n\n"
             f"Text:\n{truncated}"
@@ -47,7 +55,7 @@ class LlmExtractor:
             # Extract JSON from response (may be wrapped in markdown code block)
             text = _extract_json(text)
             data = json.loads(text)
-        except (json.JSONDecodeError, anthropic.APIError, IndexError, KeyError) as e:
+        except (json.JSONDecodeError, anthropic.APIError, ImportError, IndexError, KeyError) as e:
             logger.warning("LLM extraction failed: %s", e)
             return dict(existing)
 

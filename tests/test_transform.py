@@ -137,3 +137,11 @@ class TestTransform:
         data = json.loads(output.read_text())
         entry = data["USA.14.17_1"]
         assert entry["wikipedia_url"] == "https://en.wikipedia.org/wiki/Cook_County,_Illinois"
+
+    def test_wikipedia_url_frwiki(self, csv_path, gadm_dir, tmp_path):
+        output = tmp_path / "wikipedia.json"
+        transform(csv_path, gadm_dir, output, wiki="frwiki")
+
+        data = json.loads(output.read_text())
+        entry = data["USA.14.17_1"]
+        assert entry["wikipedia_url"] == "https://fr.wikipedia.org/wiki/Cook_County,_Illinois"

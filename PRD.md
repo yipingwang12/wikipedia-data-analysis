@@ -13,12 +13,12 @@ Traditional BFS from a single root category with optional `--max-depth` limit. P
 ## Pipeline Stages
 
 1. **Download** — 3 SQL dumps from Wikimedia (~5.7 GB compressed): `page`, `categorylinks`, `linktarget`
-2. **Parse & Cache** — Single-pass page dump (catid_map + page_meta), linktarget map, full category adjacency. Cached as pickle with mtime-validated sidecars in `data/.cache/` (~1.8 GB)
+2. **Parse & Cache** — Single-pass page dump (catid_map + page_meta), linktarget map, full category adjacency. Cached as pickle with mtime-validated sidecars in `data/.cache/{wiki}/` (~1.8 GB for enwiki)
 3. **Search** — Regex pattern matching on category names (default) OR BFS traversal from root category
 4. **Filter** — In-memory filter by length/namespace from cached page_meta (default min 5000 bytes, excludes stubs)
-5. **Fetch** — Batch wikitext + plaintext via MediaWiki API
-6. **Extract** — Infobox parsing (primary) → NLP regex extraction (secondary, bio mode only) → Claude LLM fallback (tertiary)
-7. **Output** — CSV/TSV with page_id, title, and extracted fields
+5. **Fetch** — Multistream bz2 reader (default) or batch API fetch
+6. **Extract** — Infobox parsing (primary) → NLP regex extraction (secondary, bio mode only) → Claude LLM fallback (tertiary) → date normalization
+7. **Output** — Per-pattern-file Excel (default), or single CSV/TSV. Includes article_bytes, word_count, date note columns
 8. **Transform** (optional) — CSV → `wikipedia.json` keyed by GADM GID_2 for map integration
 
 ## Usage
@@ -45,7 +45,7 @@ python scripts/transform_to_gadm.py --csv results/geo/regex_results.csv --gadm-d
 
 ### Flags
 
-- `--wiki NAME` — wiki project (default: simplewiki; e.g., `enwiki` for full English Wikipedia)
+- `--wiki NAME` — wiki project (default: enwiki; any language wiki supported, e.g., `frwiki`, `dewiki`, `simplewiki`)
 - `--patterns REGEX [REGEX ...]` — regex patterns to match category names (case-insensitive)
 - `--patterns-file PATH` — file with one regex pattern per line (combinable with `--patterns`)
 - `--extraction-mode bio|geo` — biographical (default) or geographic field extraction
@@ -76,7 +76,17 @@ Pre-built pattern files in `patterns/` for 13 categories of notable people:
 | explorers.txt | 6 | 857 | 10,348 | 6,154 |
 | **Total (deduplicated)** | | **217,836** | **2,471,918** | **1,034,547** |
 
-Biographical patterns use word-boundary anchors (`(?:^|_)..(?:$|_)`). Geographic patterns use `(?:_in_|_of_)` suffixes matching Wikipedia's `Things_in_Place` convention.
+### General Knowledge Patterns (`patterns/`)
+
+| File | Patterns | Categories | Articles | Non-stub |
+|---|---|---|---|---|
+| biology.txt | 25 | 8,707 | 517,212 | 81,466 |
+| astronomy.txt | 22 | 2,568 | 145,871 | 26,869 |
+| battles_wars_conflicts.txt | 22 | 8,088 | 114,404 | 66,472 |
+| mathematics_statistics.txt | 24 | 807 | 36,873 | 21,300 |
+| explorations_voyages_spacecraft.txt | 18 | 1,473 | 18,305 | 11,461 |
+
+Biographical patterns use word-boundary anchors (`(?:^|_)..(?:$|_)`). Geographic patterns use `(?:_in_|_of_)` suffixes matching Wikipedia's `Things_in_Place` convention. General knowledge patterns use a mix of both styles.
 
 ### Geographic Patterns (`patterns/geo/`)
 
@@ -101,21 +111,21 @@ src/wiki_pipeline/
   category_tree.py   # parse_page_dump, parse_category_links, bfs_from_root,
                      # find_categories_by_regex, collect_articles_from_categories
   page_filter.py     # filter_pages (streaming) + filter_pages_from_meta (cached)
-  cache.py           # pickle save/load with .meta mtime sidecar
-  dump_reader.py     # multistream index reader (default), legacy full-scan fallback
+  cache.py           # pickle save/load with .meta mtime sidecar, wiki-namespaced
+  dump_reader.py     # multistream index reader (batch I/O, regex plaintext), legacy fallback
   pipeline.py        # cache-aware orchestrator (regex + BFS modes)
   wiki_api.py        # MediaWiki API client (batched, rate-limited)
   infobox_parser.py      # mwparserfromhell biographical field extraction
   geo_infobox_parser.py  # mwparserfromhell geographic field extraction
   nlp_extractor.py       # regex extraction from first-sentence biographical patterns
   llm_extractor.py       # Claude Haiku fallback for missing fields
-  output.py              # CSV/TSV writer
+  output.py              # Excel/CSV/TSV writer (per-pattern-file xlsx default)
 
 scripts/
   transform_to_gadm.py    # CSV → wikipedia.json keyed by GADM GID_2
   run_geo_integration.py   # orchestrator: pipeline → transform → map data dir
 
-patterns/              # biographical regex pattern files
+patterns/              # biographical + general knowledge regex pattern files
 patterns/geo/          # geographic regex pattern files
 results/               # output directory for pipeline results
 ```
@@ -131,12 +141,13 @@ Initial parse (cold cache): ~30 min (one-time cost, shared across all searches)
 
 ### Content sourcing benchmarks
 
-**Multistream index reader** (2026-04-03, simplewiki ~358 MB dump):
+**Multistream index reader** (batch I/O + regex plaintext):
 - Uses Wikimedia's multistream bz2 format: independently-compressed blocks with byte-offset index
 - Index load: ~0.5s (551K pages); cached as pickle for instant reload
-- Seeks directly to needed blocks, decompresses only target pages
-- 10 articles: 0.06s; 1,375 articles: 23s; 69,126 articles: 357s (176/s)
-- No decompression to disk required — reads directly from compressed dump
+- Batches adjacent blocks into contiguous reads (97% of blocks within 2 MB of next)
+- Plaintext conversion via fast regex strip (replaces mwparserfromhell AST parsing)
+- enwiki (24 GB dump): ~50-60 articles/sec for 109K movie_directors_actors articles
+- simplewiki (358 MB dump): ~176 articles/sec
 
 **Full pipeline run** (2026-04-03, all 13 bio patterns → simplewiki):
 - Cache load: ~31s; regex search (298 patterns): ~292s; multistream read: ~357s; extraction: ~330s
@@ -151,11 +162,11 @@ Initial parse (cold cache): ~30 min (one-time cost, shared across all searches)
 **Disk usage** (data/):
 - SQL dump caches: ~1.8 GB (catid_map, page_meta, lt_map, parsed_catlinks)
 - Multistream dump (simplewiki): ~358 MB + ~5 MB index
-- Multistream dump (enwiki): ~22 GB + ~250 MB index
+- Multistream dump (enwiki): ~24 GB + ~267 MB index
 
 ## Tests
 
-263 tests. Run: `.venv/bin/python -m pytest tests/ -v`
+328 tests. Run: `.venv/bin/python -m pytest tests/ -v`
 
 ## Extraction Modes
 
@@ -184,6 +195,21 @@ Three-tier field extraction for birth_date, death_date, nationality, occupation:
 | occupation | 94% |
 
 NLP tier contributed on 94% of articles. The 25 "none" results were list pages and redirects. LLM tier was not invoked in benchmarking.
+
+### Date normalization
+
+Post-extraction `normalize_date` converts all date values to ISO `YYYY-MM-DD` (or `YYYY-MM`, `YYYY`, `YYYY BC`). Handles: MDY/DMY text, aged/age suffixes, HTML entities, ordinals, numeric DD-MM-YYYY / DD.MM.YYYY, BC/BCE, "or" alternatives (picks first), prefixes (On/Possibly/Died/Either), template junk (`}}`), date ranges, circa, incomplete ISO zero-padding.
+
+Approximate dates get a sortable placeholder + note column: decades (`1900s` → `1900-01-01`, note `~1900s`), centuries (`19-century` → `1801-01-01`), month-day only (`January 10` → `9999-01-10`, note `~January 10 (no year)`).
+
+**Known unhandled date edge cases** (pass through as-is):
+- `Dead by 2 March 1942` — "dead by" prefix with extractable date
+- `between 24 April 1563 and 23 April 1564` — date range with "between...and"
+- `Uncertain; 11 August 1941?` — uncertainty prefix + question mark
+- `18/19 December 1999` — day range within month
+- `194 BC (Around 82)`, `348 BC (aged )` — BC year with parenthetical age
+- `(aged around 75)` — age only, no date
+- `February or March 1945` — month-level alternative
 
 ### Geographic (`--extraction-mode geo`)
 
@@ -259,8 +285,11 @@ Goal: orchestrate data flow across a multi-product polyglot workspace via Dagste
 - **Mtime sidecar validation** — `.meta` files track source dump mtimes; stale cache auto-invalidated without loading full pickle
 - **Streaming SQL parser** — `str.find()` scanning for multi-hundred-MB INSERT lines, O(1) memory per row
 - **Multistream index reader** — seeks directly into compressed bz2 blocks via byte-offset index; reads only target pages instead of scanning entire dump. Default over legacy full-scan.
-- **Wiki-agnostic filenames** — dump filenames parameterized by `--wiki` (e.g., simplewiki, enwiki); SQL dump caches are wiki-independent
+- **Wiki-language-agnostic** — all URLs, caches, and output parameterized by `--wiki`; `wiki_to_lang()` maps wiki name to language code for API/URL generation; caches namespaced under `data/.cache/{wiki}/`; NLP/infobox extractors degrade gracefully for non-English wikis (fall through to LLM)
 - **Three-tier extraction** — infobox → NLP regex → LLM fallback → None; NLP tier eliminates most LLM calls at zero cost
 - **Word-boundary anchored patterns** — prevent false positives from substring matches (e.g., `count` in "county")
 - **Dual extraction modes** — bio/geo share pipeline infrastructure; only infobox parser and default fields differ
+- **Per-pattern-file Excel output** — default xlsx with one file per pattern file; includes article_bytes, word_count, date note columns
+- **Post-extraction date normalization** — `normalize_date_with_note` converts all date formats to ISO with sortable placeholders for approximate dates (decades, centuries, month-only)
+- **Batch multistream I/O** — adjacent bz2 blocks read in contiguous batches; regex-based plaintext conversion replaces mwparserfromhell AST parsing in dump reader
 - **GADM join by title normalization** — avoids external dependency on Wikidata; suffix stripping handles County/Parish/Borough variants

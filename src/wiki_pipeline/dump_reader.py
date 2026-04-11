@@ -9,8 +9,6 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import mwparserfromhell
-
 MW_NS = "http://www.mediawiki.org/xml/export-0.10/"
 
 def _article_dump_name(wiki: str, variant: str) -> str:
@@ -147,12 +145,62 @@ def _extract_pages_from_block(data: bytes) -> dict[int, tuple[str, str]]:
     return pages
 
 
+_RE_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_RE_REF = re.compile(r"<ref[^>]*>.*?</ref>|<ref[^/]*/?>", re.DOTALL)
+_RE_HTML = re.compile(r"<[^>]+>")
+_RE_TEMPLATE = re.compile(r"\{\{[^{}]*\}\}")
+_RE_WIKILINK = re.compile(r"\[\[(?:[^|\]]*\|)?([^\]]*)\]\]")
+_RE_EXTLINK = re.compile(r"\[https?://[^\s\]]+(?: ([^\]]*))?\]")
+_RE_BOLD_ITALIC = re.compile(r"'{2,5}")
+_RE_HEADING = re.compile(r"^=+\s*(.*?)\s*=+$", re.MULTILINE)
+_RE_CATEGORY = re.compile(r"\[\[Category:[^\]]*\]\]", re.IGNORECASE)
+_RE_FILE = re.compile(r"\[\[(?:File|Image):[^\]]*\]\]", re.IGNORECASE)
+_RE_MULTI_NEWLINE = re.compile(r"\n{3,}")
+_RE_MULTI_SPACE = re.compile(r" {2,}")
+
+
 def _convert_to_plaintext(wikitext: str) -> str:
-    """Convert wikitext to plaintext via mwparserfromhell."""
-    try:
-        return mwparserfromhell.parse(wikitext).strip_code()
-    except Exception:
-        return wikitext
+    """Convert wikitext to plaintext via fast regex stripping."""
+    s = wikitext
+    s = _RE_COMMENT.sub("", s)
+    s = _RE_REF.sub("", s)
+    s = _RE_CATEGORY.sub("", s)
+    s = _RE_FILE.sub("", s)
+    # Strip nested templates (up to 3 levels deep)
+    for _ in range(3):
+        s = _RE_TEMPLATE.sub("", s)
+    s = _RE_WIKILINK.sub(r"\1", s)
+    s = _RE_EXTLINK.sub(lambda m: m.group(1) or "", s)
+    s = _RE_HTML.sub("", s)
+    s = _RE_BOLD_ITALIC.sub("", s)
+    s = _RE_HEADING.sub(r"\1", s)
+    s = _RE_MULTI_NEWLINE.sub("\n\n", s)
+    s = _RE_MULTI_SPACE.sub(" ", s)
+    return s.strip()
+
+
+_BATCH_READ_THRESHOLD = 2 * 1024 * 1024  # 2 MB — merge reads within this gap
+
+
+def _decompress_blocks_from_buffer(
+    buf: bytes,
+    block_local_offsets: list[int],
+) -> list[bytes]:
+    """Decompress multiple bz2 blocks from a single pre-read buffer.
+
+    block_local_offsets: byte offsets within buf where each block starts.
+    """
+    results = []
+    for local_offset in block_local_offsets:
+        decompressor = bz2.BZ2Decompressor()
+        pos = local_offset
+        chunks = []
+        while not decompressor.eof and pos < len(buf):
+            end = min(pos + 65536, len(buf))
+            chunks.append(decompressor.decompress(buf[pos:end]))
+            pos = end
+        results.append(b"".join(chunks))
+    return results
 
 
 def read_articles_multistream(
@@ -165,6 +213,7 @@ def read_articles_multistream(
 
     Returns (wikitext_map, plaintext_map) keyed by title.
     Only decompresses bz2 blocks containing target pages.
+    Plaintext conversion is deferred to a second pass for speed.
     """
     # Map target page_ids to block offsets
     offset_to_targets: dict[int, set[int]] = {}
@@ -188,39 +237,82 @@ def read_articles_multistream(
     if limit:
         target_count = min(target_count, limit)
 
+    # Group adjacent offsets into batches for contiguous reads
+    batches: list[list[int]] = []
+    current_batch: list[int] = []
+    for offset in sorted_offsets:
+        if current_batch and offset - current_batch[-1] > _BATCH_READ_THRESHOLD:
+            batches.append(current_batch)
+            current_batch = [offset]
+        else:
+            current_batch.append(offset)
+    if current_batch:
+        batches.append(current_batch)
+
+    sys.stderr.write(
+        f"  {len(sorted_offsets)} blocks in {len(batches)} batches\n"
+    )
+    sys.stderr.flush()
+
+    # Phase 1: read + decompress blocks, collect wikitext only
     wikitext_map: dict[str, str] = {}
-    plaintext_map: dict[str, str] = {}
     found = 0
     start = time.time()
 
     with open(dump_path, "rb") as f:
-        for offset in sorted_offsets:
-            block_data = _decompress_bz2_block(f, offset)
-            block_pages = _extract_pages_from_block(block_data)
+        for batch in batches:
+            batch_start = batch[0]
+            # Read from first offset to end of last block's expected range
+            # We over-read slightly but avoid per-block seeks
+            batch_end = batch[-1] + _BATCH_READ_THRESHOLD
+            f.seek(batch_start)
+            buf = f.read(batch_end - batch_start)
 
-            for pid, (title, wikitext) in block_pages.items():
-                if pid not in offset_to_targets[offset]:
-                    continue
-                wikitext_map[title] = wikitext
-                plaintext_map[title] = _convert_to_plaintext(wikitext)
+            local_offsets = [off - batch_start for off in batch]
+            block_data_list = _decompress_blocks_from_buffer(buf, local_offsets)
 
-                found += 1
-                elapsed = time.time() - start
-                rate = found / max(elapsed, 0.001)
-                sys.stderr.write(
-                    f"\r  Multistream read: {found}/{target_count} articles  "
-                    f"[{elapsed:.0f}s, {rate:.0f}/s]"
-                )
-                sys.stderr.flush()
+            for offset, block_data in zip(batch, block_data_list):
+                block_pages = _extract_pages_from_block(block_data)
+
+                for pid, (title, wikitext) in block_pages.items():
+                    if pid not in offset_to_targets[offset]:
+                        continue
+                    wikitext_map[title] = wikitext
+
+                    found += 1
+                    if found % 500 == 0 or found == target_count:
+                        elapsed = time.time() - start
+                        rate = found / max(elapsed, 0.001)
+                        sys.stderr.write(
+                            f"\r  Multistream read: {found}/{target_count} articles  "
+                            f"[{elapsed:.0f}s, {rate:.0f}/s]"
+                        )
+                        sys.stderr.flush()
+
+                    if limit and found >= limit:
+                        break
 
                 if limit and found >= limit:
                     break
-
             if limit and found >= limit:
                 break
 
-    sys.stderr.write("\n")
+    elapsed = time.time() - start
+    sys.stderr.write(
+        f"\r  Multistream read: {found}/{target_count} articles  "
+        f"[{elapsed:.0f}s, {found / max(elapsed, 0.001):.0f}/s]\n"
+    )
+
+    # Phase 2: convert wikitext to plaintext
+    sys.stderr.write(f"  Converting {len(wikitext_map)} articles to plaintext...")
     sys.stderr.flush()
+    t2 = time.time()
+    plaintext_map: dict[str, str] = {}
+    for title, wikitext in wikitext_map.items():
+        plaintext_map[title] = _convert_to_plaintext(wikitext)
+    sys.stderr.write(f" [{time.time() - t2:.0f}s]\n")
+    sys.stderr.flush()
+
     return wikitext_map, plaintext_map
 
 

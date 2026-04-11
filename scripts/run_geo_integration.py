@@ -18,6 +18,7 @@ def run_pipeline(
     results_dir: Path,
     extraction_mode: str = "geo",
     dry_run: bool = False,
+    wiki: str = "enwiki",
 ) -> Path | None:
     """Run the Wikipedia pipeline and return the CSV output path."""
     cmd = [
@@ -25,6 +26,7 @@ def run_pipeline(
         "--patterns-file", str(patterns_file),
         "--extraction-mode", extraction_mode,
         "--results-dir", str(results_dir),
+        "--wiki", wiki,
     ]
     if dry_run:
         cmd.append("--dry-run")
@@ -42,13 +44,14 @@ def run_pipeline(
     return csvs[0] if csvs else None
 
 
-def run_transform(csv_path: Path, gadm_data_dir: Path, output_path: Path) -> None:
+def run_transform(csv_path: Path, gadm_data_dir: Path, output_path: Path, wiki: str = "enwiki") -> None:
     """Run the GADM transform script."""
     cmd = [
         sys.executable, str(SCRIPT_DIR / "transform_to_gadm.py"),
         "--csv", str(csv_path),
         "--gadm-data-dir", str(gadm_data_dir),
         "--output", str(output_path),
+        "--wiki", wiki,
     ]
     print(f"Running transform: {' '.join(cmd)}")
     result = subprocess.run(cmd)
@@ -64,6 +67,7 @@ def main() -> None:
                     help="Path to global-geo-atlas/data/")
     p.add_argument("--patterns-file", type=Path, default=GEO_PATTERNS_DIR / "admin_subdivisions.txt",
                     help="Geo pattern file to use")
+    p.add_argument("--wiki", default="enwiki", help="Wiki project name (e.g., enwiki, frwiki)")
     p.add_argument("--dry-run", action="store_true", help="Pipeline dry-run only (no API calls)")
     args = p.parse_args()
 
@@ -76,7 +80,7 @@ def main() -> None:
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Run pipeline
-    csv_path = run_pipeline(args.patterns_file, results_dir, dry_run=args.dry_run)
+    csv_path = run_pipeline(args.patterns_file, results_dir, dry_run=args.dry_run, wiki=args.wiki)
     if args.dry_run:
         print("Dry run complete.")
         return
@@ -86,7 +90,7 @@ def main() -> None:
 
     # Step 2: Transform
     output_path = gadm_data_dir / "wikipedia.json"
-    run_transform(csv_path, gadm_data_dir, output_path)
+    run_transform(csv_path, gadm_data_dir, output_path, wiki=args.wiki)
 
     print(f"Done: {output_path}")
 

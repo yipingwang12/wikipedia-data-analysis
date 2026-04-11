@@ -5,10 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import openpyxl
+
 from wiki_pipeline.category_tree import CategoryTree, ParsedCategoryLinks
 from wiki_pipeline.config import PipelineConfig
 from wiki_pipeline.page_filter import PageInfo
 from wiki_pipeline.pipeline import run
+
+
+def _read_xlsx_text(path: Path) -> str:
+    """Read xlsx file and return all cell values as a single string for assertion checks."""
+    wb = openpyxl.load_workbook(path)
+    ws = wb.active
+    return " ".join(str(cell.value or "") for row in ws.iter_rows() for cell in row)
 
 
 def _config(tmp_path: Path, **overrides) -> PipelineConfig:
@@ -79,7 +88,7 @@ class TestPipeline:
 
         assert result is not None
         assert result.exists()
-        content = result.read_text()
+        content = _read_xlsx_text(result)
         assert "Article A" in content or "Article_A" in content
 
     @patch("wiki_pipeline.pipeline.download_dump")
@@ -238,7 +247,7 @@ class TestPipelineCache:
 
         config = _config(tmp_path, dry_run=True, clear_cache=True)
         run(config)
-        mock_clear.assert_called_once_with(config.data_dir)
+        mock_clear.assert_called_once_with(config.data_dir, config.wiki)
 
     @patch("wiki_pipeline.pipeline.download_dump")
     @patch("wiki_pipeline.pipeline.load_pickle")
@@ -405,7 +414,7 @@ class TestPipelineRegexMode:
         result = run(config)
         assert result is not None
         assert result.exists()
-        assert "Monet" in result.read_text()
+        assert "Monet" in _read_xlsx_text(result)
 
 
 class TestPipelineGeoMode:
@@ -448,7 +457,7 @@ class TestPipelineGeoMode:
 
         assert result is not None
         assert result.exists()
-        content = result.read_text()
+        content = _read_xlsx_text(result)
         assert "50000" in content
         assert "Illinois" in content
 

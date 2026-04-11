@@ -12,7 +12,7 @@ from wiki_pipeline.category_tree import (
     find_categories_by_regex,
     ParsedCategoryLinks,
 )
-from wiki_pipeline.dump_reader import read_articles_from_dump
+from wiki_pipeline.dump_reader import _article_dump_name, read_articles_from_dump
 from wiki_pipeline.infobox_parser import extract_infobox_fields
 from wiki_pipeline.nlp_extractor import extract_from_text
 from wiki_pipeline.output import write_results
@@ -22,8 +22,9 @@ SAMPLE_SIZE = 1000
 MIN_PAGE_LENGTH = 5000
 REQUIRED_FIELDS = ("birth_date", "death_date", "nationality", "occupation")
 DATA_DIR = Path("data")
-CACHE_DIR = DATA_DIR / ".cache"
-DUMP_FILE = DATA_DIR / "enwiki-latest-pages-articles.xml.bz2"
+WIKI = "enwiki"
+CACHE_DIR = DATA_DIR / ".cache" / WIKI
+DUMP_FILE = DATA_DIR / _article_dump_name(WIKI, "bz2")
 PATTERNS_FILE = Path("patterns/visual_artists.txt")
 RESULTS_DIR = Path("results/benchmark_extraction")
 

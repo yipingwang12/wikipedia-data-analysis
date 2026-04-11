@@ -16,8 +16,8 @@ class CacheMetadata:
     created_at: float
 
 
-def cache_dir(data_dir: Path) -> Path:
-    return data_dir / ".cache"
+def cache_dir(data_dir: Path, wiki: str = "enwiki") -> Path:
+    return data_dir / ".cache" / wiki
 
 
 def save_pickle(data: object, cache_path: Path, source_paths: list[Path]) -> None:
@@ -60,9 +60,9 @@ def load_pickle(cache_path: Path, source_paths: list[Path]) -> object | None:
         return None
 
 
-def clear_cache(data_dir: Path) -> int:
-    """Remove all files from cache dir, return count removed."""
-    d = cache_dir(data_dir)
+def clear_cache(data_dir: Path, wiki: str = "enwiki") -> int:
+    """Remove all files from cache dir for a specific wiki, return count removed."""
+    d = cache_dir(data_dir, wiki)
     if not d.exists():
         return 0
     count = 0

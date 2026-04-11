@@ -23,8 +23,10 @@ def _make_source(tmp_path: Path, name: str, content: str = "data") -> Path:
 
 
 class TestCacheDir:
-    def test_returns_dot_cache(self, tmp_path):
-        assert cache_dir(tmp_path) == tmp_path / ".cache"
+    def test_returns_dot_cache_with_wiki(self, tmp_path):
+        assert cache_dir(tmp_path) == tmp_path / ".cache" / "enwiki"
+        assert cache_dir(tmp_path, "frwiki") == tmp_path / ".cache" / "frwiki"
+        assert cache_dir(tmp_path, "simplewiki") == tmp_path / ".cache" / "simplewiki"
 
 
 class TestSaveAndLoadPickle:
@@ -101,8 +103,8 @@ class TestClearCache:
         assert clear_cache(tmp_path) == 0
 
     def test_removes_files(self, tmp_path):
-        d = tmp_path / ".cache"
-        d.mkdir()
+        d = tmp_path / ".cache" / "enwiki"
+        d.mkdir(parents=True)
         (d / "a.pkl").write_text("x")
         (d / "b.pkl.meta").write_text("y")
         assert clear_cache(tmp_path) == 2
@@ -110,6 +112,17 @@ class TestClearCache:
 
     def test_nonexistent_cache_dir(self, tmp_path):
         assert clear_cache(tmp_path / "nope") == 0
+
+    def test_clears_only_specified_wiki(self, tmp_path):
+        en = tmp_path / ".cache" / "enwiki"
+        fr = tmp_path / ".cache" / "frwiki"
+        en.mkdir(parents=True)
+        fr.mkdir(parents=True)
+        (en / "a.pkl").write_text("x")
+        (fr / "b.pkl").write_text("y")
+        assert clear_cache(tmp_path, "enwiki") == 1
+        assert not (en / "a.pkl").exists()
+        assert (fr / "b.pkl").exists()
 
 
 class TestCacheMetadata:

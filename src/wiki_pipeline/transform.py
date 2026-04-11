@@ -7,6 +7,8 @@ import json
 import re
 from pathlib import Path
 
+from .config import wiki_to_lang
+
 _SUFFIX_RE = re.compile(
     r"\s+(?:county|parish|borough|census\s+area|municipality|district"
     r"|department|prefecture|province|commune)$",
@@ -48,7 +50,7 @@ def build_gadm_index(gadm_data_dir: Path) -> dict[str, str]:
     return index
 
 
-def transform(csv_path: Path, gadm_data_dir: Path, output_path: Path) -> None:
+def transform(csv_path: Path, gadm_data_dir: Path, output_path: Path, wiki: str = "enwiki") -> None:
     """Read CSV, match titles to GID_2, write wikipedia.json."""
     index = build_gadm_index(gadm_data_dir)
     result: dict[str, dict] = {}
@@ -72,8 +74,9 @@ def transform(csv_path: Path, gadm_data_dir: Path, output_path: Path) -> None:
                 val = row.get(field)
                 if val:
                     entry[field] = val
+            lang = wiki_to_lang(wiki)
             entry["wikipedia_url"] = (
-                "https://en.wikipedia.org/wiki/" + title.replace(" ", "_")
+                f"https://{lang}.wikipedia.org/wiki/" + title.replace(" ", "_")
             )
             result[gid2] = entry
 

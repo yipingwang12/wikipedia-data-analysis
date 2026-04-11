@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from wiki_pipeline.nlp_extractor import extract_from_text
+from wiki_pipeline.nlp_extractor import extract_from_text, normalize_date, normalize_date_with_note
 
 REQUIRED = ("birth_date", "death_date", "nationality", "occupation")
 ALL_NONE = {f: None for f in REQUIRED}
@@ -300,3 +300,157 @@ class TestRealWikipediaExamples:
         result = extract_from_text(text, dict(ALL_NONE), REQUIRED)
         assert result["birth_date"] is None
         assert result["death_date"] is None
+
+
+class TestNormalizeDate:
+    def test_iso_passthrough(self):
+        assert normalize_date("1840-11-14") == "1840-11-14"
+
+    def test_year_only(self):
+        assert normalize_date("1974") == "1974"
+
+    def test_mdy(self):
+        assert normalize_date("October 26, 1965") == "1965-10-26"
+
+    def test_dmy(self):
+        assert normalize_date("14 February 1989") == "1989-02-14"
+
+    def test_dmy_with_comma(self):
+        assert normalize_date("3 November,  2002") == "2002-11-03"
+
+    def test_aged_suffix(self):
+        assert normalize_date("August 25, 2001 (aged 22)") == "2001-08-25"
+
+    def test_age_suffix(self):
+        assert normalize_date("June 3, 2009 (age 72)") == "2009-06-03"
+
+    def test_circa(self):
+        assert normalize_date("c. 1450") == "c. 1450"
+
+    def test_html_entities(self):
+        assert normalize_date("14&nbsp;November&nbsp;1840") == "1840-11-14"
+
+    def test_ordinals(self):
+        assert normalize_date("3rd November 1840") == "1840-11-03"
+
+    def test_month_year(self):
+        assert normalize_date("November 1840") == "1840-11"
+
+    def test_none(self):
+        assert normalize_date(None) is None
+
+    def test_empty(self):
+        assert normalize_date("") is None
+
+    def test_date_range(self):
+        assert normalize_date("1840/42") == "1840"
+
+    def test_numeric_dd_mm_yyyy(self):
+        assert normalize_date("31-08-1983") == "1983-08-31"
+
+    def test_numeric_dd_slash_mm_yyyy(self):
+        assert normalize_date("31/08/1983") == "1983-08-31"
+
+    def test_of_between_day_and_month(self):
+        assert normalize_date("9 of May, 1971") == "1971-05-09"
+
+    def test_of_between_day_and_month_no_space(self):
+        assert normalize_date("3 of December,2001") == "2001-12-03"
+
+    def test_mdy_no_space_after_comma(self):
+        assert normalize_date("October 10,1985") == "1985-10-10"
+
+    def test_on_prefix(self):
+        assert normalize_date("On November 27, 1948") == "1948-11-27"
+
+    def test_possibly_prefix_year(self):
+        assert normalize_date("Possibly 1945") == "1945"
+
+    def test_possibly_prefix_full_date(self):
+        assert normalize_date("Possibly 17 July 1947 (aged 34) or 31 July 1952") == "1947-07-17"
+
+    def test_died_prefix(self):
+        assert normalize_date("Died February 4, 1983") == "1983-02-04"
+
+    def test_birth_date_prefix(self):
+        assert normalize_date("Birth date March 2, 1950") == "1950-03-02"
+
+    def test_dot_separated_numeric(self):
+        assert normalize_date("11.06.1958") == "1958-06-11"
+
+    def test_or_alternatives_year(self):
+        assert normalize_date("1608 or 1609") == "1608"
+
+    def test_or_alternatives_full(self):
+        assert normalize_date("1934 or 1935") == "1934"
+
+    def test_bc_year(self):
+        assert normalize_date("620 BC") == "620 BC"
+
+    def test_bce_year(self):
+        assert normalize_date("375 BCE") == "375 BC"
+
+    def test_bc_mdy(self):
+        assert normalize_date("March 20, 43 BC") == "43-03-20 BC"
+
+    def test_bc_month_year(self):
+        assert normalize_date("February 341 BC") == "341-02 BC"
+
+    def test_bc_dmy(self):
+        assert normalize_date("7 December 43 BC") == "43-12-07 BC"
+
+    def test_incomplete_iso(self):
+        assert normalize_date("1908-6-24") == "1908-06-24"
+
+    def test_either_or(self):
+        assert normalize_date("Either 1946, 1947 or 1949") == "1946"
+
+    def test_year_comma_mdy(self):
+        assert normalize_date("1955, January 19") == "1955"
+
+    def test_template_junk_with_year(self):
+        assert normalize_date("965}} ()}}") == "965"
+
+    def test_template_junk_only(self):
+        assert normalize_date("}}") is None
+
+    def test_template_junk_with_aged(self):
+        assert normalize_date("1040}} ()}} (aged around 75)") == "1040"
+
+
+class TestNormalizeDateWithNote:
+    def test_decade(self):
+        assert normalize_date_with_note("1900s") == ("1900-01-01", "~1900s")
+
+    def test_early_decade(self):
+        assert normalize_date_with_note("early 1960s") == ("1960-01-01", "~early 1960s")
+
+    def test_late_decade(self):
+        assert normalize_date_with_note("late 1950s") == ("1950-01-01", "~late 1950s")
+
+    def test_century(self):
+        assert normalize_date_with_note("7 century") == ("0601-01-01", "~7 century")
+
+    def test_century_with_ordinal(self):
+        assert normalize_date_with_note("19th century") == ("1801-01-01", "~19th century")
+
+    def test_century_hyphenated(self):
+        assert normalize_date_with_note("19-century") == ("1801-01-01", "~19-century")
+
+    def test_century_20(self):
+        assert normalize_date_with_note("20-century") == ("1901-01-01", "~20-century")
+
+    def test_regular_date_no_note(self):
+        assert normalize_date_with_note("1840-11-14") == ("1840-11-14", None)
+
+    def test_none(self):
+        assert normalize_date_with_note(None) == (None, None)
+
+    def test_month_day_mdy(self):
+        assert normalize_date_with_note("January 10") == ("9999-01-10", "~January 10 (no year)")
+
+    def test_month_day_dmy(self):
+        assert normalize_date_with_note("19 November") == ("9999-11-19", "~19 November (no year)")
+
+    def test_month_comma_day(self):
+        assert normalize_date_with_note("November, 12") == ("9999-11-12", "~November, 12 (no year)")

@@ -151,34 +151,152 @@ _WAS_A_RE = re.compile(
 )
 
 
-def _normalize_date(raw: str) -> str | None:
-    """Normalize a date string to ISO YYYY-MM-DD, year-only, or c. year."""
-    raw = raw.strip()
+def normalize_date_with_note(raw: str | None) -> tuple[str | None, str | None]:
+    """Normalize a date, returning (normalized_date, note).
+
+    Note is non-None when the date is an approximation (decade/century).
+    """
+    if not raw:
+        return None, None
+    s = raw.strip()
+
+    # Decade approximations: "1900s", "early 1960s", "late 1950s"
+    m = re.match(r"^(early|late|mid)?\s*(\d{3,4})s$", s, re.I)
+    if m:
+        qualifier, decade = m.group(1), int(m.group(2))
+        return f"{decade}-01-01", f"~{s}"
+
+    # Century references: "7 century", "19-century", "20-century"
+    m = re.match(r"^(\d{1,2})(?:st|nd|rd|th)?[- ]?century$", s, re.I)
+    if m:
+        century = int(m.group(1))
+        year = (century - 1) * 100 + 1
+        return f"{year:04d}-01-01", f"~{s}"
+
+    # Month + day only (no year): "January 10", "19 November", "November, 12"
+    m = re.match(rf"^({_MONTH_RE}),?\s+(\d{{1,2}})$", s, re.IGNORECASE)
+    if m:
+        month_name, day = m.group(1).lower(), int(m.group(2))
+        return f"9999-{MONTH_MAP[month_name]:02d}-{day:02d}", f"~{raw.strip()} (no year)"
+    m = re.match(rf"^(\d{{1,2}})\s+({_MONTH_RE})$", s, re.IGNORECASE)
+    if m:
+        day, month_name = int(m.group(1)), m.group(2).lower()
+        return f"9999-{MONTH_MAP[month_name]:02d}-{day:02d}", f"~{raw.strip()} (no year)"
+
+    date = normalize_date(s)
+    return date, None
+
+
+def normalize_date(raw: str | None) -> str | None:
+    """Normalize a date string to ISO YYYY-MM-DD, YYYY-MM, year-only, or c. year.
+
+    Handles: text dates (MDY/DMY), aged/age suffixes, HTML entities, ordinals,
+    date ranges, circa prefixes, and extra commas/whitespace.
+    """
     if not raw:
         return None
+    s = raw.strip()
 
+    # Clean HTML entities and markup
+    s = s.replace("&ndash;", "-").replace("&nbsp;", " ")
+    s = re.sub(r"&\w+;", "", s)
+
+    # Strip template junk: "965}} ()}}..." → "965"
+    if "}}" in s:
+        s = s.split("}}")[0].strip()
+
+    # Strip aged/age suffixes: "(aged 72)", "(age 72)"
+    s = re.sub(r"\s*[,(]?\s*aged\s+(?:about\s+)?\d+[^)]*\)?\s*,?\s*$", "", s, flags=re.I)
+    s = re.sub(r"\s*\(age\s+\d+[^)]*\)\s*$", "", s, flags=re.I)
+
+    # Strip ordinal suffixes: 1st → 1, 2nd → 2
+    s = re.sub(r"(\d+)(?:st|nd|rd|th)\b", r"\1", s, flags=re.I)
+
+    # Strip leading prefixes: "On", "Possibly", "Died", "Birth date", "Either"
+    s = re.sub(r"^(?:On|Possibly|Died|Birth date|Either)\s+", "", s, flags=re.I)
+
+    # Strip leading "c." or "c "
     circa = ""
-    if raw.lower().startswith("c."):
+    if re.match(r"^[Cc]\.\s*", s):
         circa = "c. "
-        raw = raw[2:].strip()
+        s = re.sub(r"^[Cc]\.\s*", "", s)
+
+    # Strip "or ..." alternatives: "1608 or 1609" → "1608"
+    s = re.sub(r"\s+or\s+.*$", "", s)
+
+    # Strip comma-separated year alternatives: "1946, 1947" → "1946"
+    # Only when the part before the comma is a bare year
+    m_alt = re.match(r"^(\d{3,4}),\s+", s)
+    if m_alt:
+        s = m_alt.group(1)
+
+    # Collapse whitespace, strip trailing commas
+    s = re.sub(r"\s+", " ", s).strip().rstrip(",").strip()
+
+    # Already ISO?
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        return f"{circa}{s}" if circa else s
+
+    # Incomplete ISO: "1908-6-24" → zero-pad
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        return f"{circa}{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
 
     # Year-only: "1840"
-    if re.fullmatch(r"\d{3,4}", raw):
-        return f"{circa}{raw}"
+    if re.fullmatch(r"\d{3,4}", s):
+        return f"{circa}{s}"
 
-    # Try DMY: "14 November 1840"
-    m = re.match(rf"(\d{{1,2}})\s+({_MONTH_RE})\s+(\d{{3,4}})", raw, re.IGNORECASE)
+    # Date range "1840/42" or "1840-42" → take first year
+    m = re.match(r"^(\d{3,4})[-/]\d{2,4}$", s)
+    if m:
+        return f"{circa}{m.group(1)}"
+
+    # Numeric DD-MM-YYYY, DD/MM/YYYY, or DD.MM.YYYY
+    m = re.fullmatch(r"(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})", s)
+    if m:
+        day, month, year = int(m.group(1)), int(m.group(2)), m.group(3)
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return f"{circa}{year}-{month:02d}-{day:02d}"
+
+    # BC/BCE suffix — extract before text date matching
+    bc = ""
+    m_bc = re.search(r"\s*B\.?C\.?E?\.?\s*$", s, re.I)
+    if m_bc:
+        bc = " BC"
+        s = s[:m_bc.start()].strip()
+        # Year-only BC: "620", "43"
+        if re.fullmatch(r"\d{1,4}", s):
+            return f"{circa}{s}{bc}"
+
+    # DMY: "14 November 1840", "14 November, 1840", "14 of November, 1840"
+    m = re.match(rf"(\d{{1,2}})\s+(?:of\s+)?({_MONTH_RE}),?\s*(\d{{1,4}})", s, re.IGNORECASE)
     if m:
         day, month_name, year = int(m.group(1)), m.group(2).lower(), m.group(3)
-        return f"{circa}{year}-{MONTH_MAP[month_name]:02d}-{day:02d}"
+        return f"{circa}{year}-{MONTH_MAP[month_name]:02d}-{day:02d}{bc}"
 
-    # Try MDY: "November 14, 1840"
-    m = re.match(rf"({_MONTH_RE})\s+(\d{{1,2}}),?\s+(\d{{3,4}})", raw, re.IGNORECASE)
+    # MDY: "November 14, 1840", "November 14,1840" (require comma or space+4-digit year)
+    m = re.match(rf"({_MONTH_RE})\s+(\d{{1,2}}),\s*(\d{{1,4}})", s, re.IGNORECASE)
+    if not m:
+        m = re.match(rf"({_MONTH_RE})\s+(\d{{1,2}})\s+(\d{{4}})", s, re.IGNORECASE)
     if m:
         month_name, day, year = m.group(1).lower(), int(m.group(2)), m.group(3)
-        return f"{circa}{year}-{MONTH_MAP[month_name]:02d}-{day:02d}"
+        return f"{circa}{year}-{MONTH_MAP[month_name]:02d}-{day:02d}{bc}"
 
-    return None
+    # Month + year: "November 1840", "February 341 BC"
+    m = re.match(rf"({_MONTH_RE})\s+(\d{{1,4}})$", s, re.IGNORECASE)
+    if m:
+        month_name, year = m.group(1).lower(), m.group(2)
+        return f"{circa}{year}-{MONTH_MAP[month_name]:02d}{bc}"
+
+    # If we stripped BC but couldn't parse the rest, restore it
+    if bc:
+        return f"{circa}{s}{bc}" if s else None
+
+    return s if s else None
+
+
+# Keep private alias for internal use
+_normalize_date = normalize_date
 
 
 def _extract_first_paragraph(plain_text: str) -> str:
