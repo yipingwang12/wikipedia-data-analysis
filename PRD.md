@@ -315,6 +315,10 @@ Goal: orchestrate data flow across a multi-product polyglot workspace via Dagste
 
 **Why not Bazel/Pants/Moon yet:** designed for code that compiles and links. Pipelines here are fetch-from-internet → GDAL/osmium → write JSON; build-system hermeticity rules fight non-hermetic data sources. Revisit only if shared library code becomes substantial.
 
+## TODO
+
+- **Re-run simplewiki bio extraction** — `min_page_length` now defaults to 0 for simplewiki (was 5000), recovering ~65k additional articles including short stubs. Re-run `uv run python -m wiki_pipeline --wiki simplewiki` to regenerate Excel files in `results/simplewiki/`. Caches are already built; bulk of time is multistream read + extraction for new articles. Motivated by cross-repo entity matching with doc2md index entries (Cambridge History of Science v2 gains ~38 matches from the lower threshold).
+
 ## Key Design Decisions
 
 - **Regex as default search** — scan all category names with user-defined patterns; more flexible than single-root BFS for thematic queries

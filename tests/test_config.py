@@ -159,6 +159,15 @@ class TestParseArgs:
         assert cfg.wiki == "simplewiki"
         assert "simplewiki" in cfg.dump_base_url
         assert cfg.wiki_api_url == "https://simple.wikipedia.org/w/api.php"
+        assert cfg.min_page_length == 0
+
+    def test_wiki_simplewiki_explicit_min_page_length(self):
+        cfg = parse_args(["Cat", "--wiki", "simplewiki", "--min-page-length", "2000"])
+        assert cfg.min_page_length == 2000
+
+    def test_wiki_enwiki_default_min_page_length(self):
+        cfg = parse_args(["Cat", "--wiki", "enwiki"])
+        assert cfg.min_page_length == 5000
 
     def test_wiki_frwiki_api_url(self):
         cfg = parse_args(["Cat", "--wiki", "frwiki"])

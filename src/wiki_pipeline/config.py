@@ -142,6 +142,11 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     dump_base_url = f"https://dumps.wikimedia.org/{wiki}/latest"
     wiki_api_url = f"https://{lang}.wikipedia.org/w/api.php"
 
+    # simplewiki articles are shorter than enwiki; include all stubs by default
+    min_page_length = args.min_page_length
+    if min_page_length == 5000 and wiki == "simplewiki":
+        min_page_length = 0
+
     return PipelineConfig(
         wiki=wiki,
         root_category=args.root_category,
@@ -149,7 +154,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
         pattern_groups=tuple(pattern_groups),
         dump_base_url=dump_base_url,
         wiki_api_url=wiki_api_url,
-        min_page_length=args.min_page_length,
+        min_page_length=min_page_length,
         data_dir=args.data_dir,
         results_dir=args.results_dir,
         api_batch_size=args.api_batch_size,
