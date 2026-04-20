@@ -27,6 +27,7 @@ from .dump_reader import (
     resolve_dump_path,
     resolve_multistream_paths,
 )
+from .etymology_extractor import extract_etymology_fields, extract_etymology_from_lead
 from .extractors import EXTRACTOR_REGISTRY
 from .geo_infobox_parser import extract_geo_infobox_fields
 from .infobox_parser import extract_infobox_fields
@@ -262,6 +263,7 @@ def run(config: PipelineConfig) -> Path | None:
     _MODE_EXTRACTORS = {
         "bio": extract_infobox_fields,
         "geo": extract_geo_infobox_fields,
+        "etymology": extract_etymology_fields,
     }
     for stem, (fn, _) in EXTRACTOR_REGISTRY.items():
         # Map pattern stems to extraction mode names
@@ -278,6 +280,7 @@ def run(config: PipelineConfig) -> Path | None:
     _MODE_FIELDS = {
         "bio": ("birth_date", "death_date", "nationality", "occupation"),
         "geo": ("population", "area_km2", "elevation_m", "subdivision_name", "subdivision_type"),
+        "etymology": ("etymology",),
     }
     for stem, (_, fields) in EXTRACTOR_REGISTRY.items():
         _MODE_FIELDS[_stem_to_mode[stem]] = fields
@@ -299,22 +302,28 @@ def run(config: PipelineConfig) -> Path | None:
 
     _DATE_FIELDS = {"birth_date", "death_date", "date", "discovery_date", "year_discovered"}
 
-    def _extract_article(title, extract_fn, required_fields):
+    def _extract_article(title, extract_fn, required_fields, mode="bio"):
         wikitext = wikitext_map.get(title, "")
+        plaintext = plaintext_map.get(title, "")
         fields = extract_fn(wikitext, required_fields)
 
-        has_gaps = any(v is None for v in fields.values())
-        if has_gaps and title in plaintext_map:
-            fields = extract_from_text(
-                plaintext_map[title], fields, required_fields
-            )
-
+        if mode == "etymology":
+            if fields.get("etymology") is None and plaintext:
+                lead_text = extract_etymology_from_lead(plaintext)
+                if lead_text:
+                    fields["etymology"] = lead_text
+            if fields.get("etymology") is None and plaintext:
+                fields = llm.extract_etymology(plaintext, lang=wiki_to_lang(config.wiki))
+        else:
             has_gaps = any(v is None for v in fields.values())
-            if has_gaps:
-                fields = llm.extract_missing(
-                    plaintext_map[title], fields, required_fields,
-                    lang=wiki_to_lang(config.wiki),
-                )
+            if has_gaps and plaintext:
+                fields = extract_from_text(plaintext, fields, required_fields)
+                has_gaps = any(v is None for v in fields.values())
+                if has_gaps:
+                    fields = llm.extract_missing(
+                        plaintext, fields, required_fields,
+                        lang=wiki_to_lang(config.wiki),
+                    )
 
         date_notes: dict[str, str | None] = {}
         for date_field in _DATE_FIELDS:
@@ -326,7 +335,6 @@ def run(config: PipelineConfig) -> Path | None:
                 else:
                     date_notes[f"{date_field}_note"] = None
 
-        plaintext = plaintext_map.get(title, "")
         record: dict[str, str | int | None] = {
             "page_id": title_to_id.get(title, 0),
             "title": title,
@@ -358,7 +366,7 @@ def run(config: PipelineConfig) -> Path | None:
             group_pages = filter_pages_from_meta(page_meta, group_ids, config.min_page_length)
             group_titles = sorted({p.title.replace("_", " ") for p in group_pages} & set(wikitext_map.keys()))
 
-            group_records = [_extract_article(t, extract_fn, required_fields) for t in group_titles]
+            group_records = [_extract_article(t, extract_fn, required_fields, mode) for t in group_titles]
             total_processed += len(group_records)
 
             output_path = config.results_dir / f"{stem}.xlsx"
@@ -374,7 +382,7 @@ def run(config: PipelineConfig) -> Path | None:
         extract_fn = _MODE_EXTRACTORS.get(mode, extract_infobox_fields)
         all_records: list[dict[str, str | int | None]] = []
         for title in titles:
-            all_records.append(_extract_article(title, extract_fn, config.required_fields))
+            all_records.append(_extract_article(title, extract_fn, config.required_fields, mode))
         print(f"Processed {len(all_records)} articles")
 
         ext = {"xlsx": "xlsx", "tsv": "tsv"}.get(config.output_format, "csv")

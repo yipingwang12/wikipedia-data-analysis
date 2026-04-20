@@ -67,6 +67,38 @@ class LlmExtractor:
         return result
 
 
+    def extract_etymology(
+        self,
+        plain_text: str,
+        lang: str = "en",
+    ) -> dict[str, str | None]:
+        """Extract etymology/name-origin from plain text using Claude."""
+        truncated = plain_text[:3000]
+        lang_hint = " The text may be in a non-English language." if lang != "en" else ""
+        prompt = (
+            f"Extract the etymology or origin of the name from the geographic feature article below.{lang_hint} "
+            f"Return ONLY a JSON object with a single key 'etymology' whose value is a concise "
+            f"1-3 sentence explanation of how the place got its name, or null if not determinable.\n\n"
+            f"Text:\n{truncated}"
+        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=256,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = response.content[0].text.strip()
+            text = _extract_json(text)
+            data = json.loads(text)
+        except (json.JSONDecodeError, anthropic.APIError, ImportError, IndexError, KeyError) as e:
+            logger.warning("LLM etymology extraction failed: %s", e)
+            return {"etymology": None}
+        val = data.get("etymology")
+        if val and isinstance(val, str) and val.strip():
+            return {"etymology": val.strip()}
+        return {"etymology": None}
+
+
 def _extract_json(text: str) -> str:
     """Strip markdown code fences if present."""
     if "```" in text:

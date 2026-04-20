@@ -72,7 +72,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     p.add_argument("--api-rate-limit", type=float, default=0.1)
     p.add_argument("--claude-model", default="claude-haiku-4-5-20251001")
     p.add_argument("--extraction-mode",
-                    choices=["bio", "geo", "battle", "exploration", "astronomy", "biology", "math", "auto"],
+                    choices=["bio", "geo", "etymology", "battle", "exploration", "astronomy", "biology", "math", "auto"],
                     default="auto",
                     help="Extraction mode (default: auto-detect from pattern file)")
     p.add_argument("--required-fields", nargs="+", default=None,
@@ -109,7 +109,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     use_all = args.all or (not args.use_api and not patterns and not args.root_category
                            and not args.download_articles)
     if use_all and not patterns:
-        patterns_dir = GEO_PATTERNS_DIR if args.extraction_mode == "geo" else BIO_PATTERNS_DIR
+        patterns_dir = GEO_PATTERNS_DIR if args.extraction_mode in ("geo", "etymology") else BIO_PATTERNS_DIR
         for pat_file in sorted(patterns_dir.glob("*.txt")):
             text = pat_file.read_text()
             file_pats = [line.strip() for line in text.splitlines() if line.strip()]
@@ -130,6 +130,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
         "astronomy": ("type", "distance", "mass", "radius", "constellation", "discovery_date", "orbital_period", "rotational_period"),
         "biology": ("type", "scientific_name", "conservation_status", "habitat", "distribution"),
         "math": ("field", "year_discovered", "discoverer", "related_to"),
+        "etymology": ("etymology",),
         "auto": ("birth_date", "death_date", "nationality", "occupation"),
     }
     if args.required_fields is not None:

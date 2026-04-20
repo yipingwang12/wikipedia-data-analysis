@@ -69,6 +69,41 @@ class TestLlmExtractor:
         assert result["nationality"] is None
 
 
+class TestLlmExtractorEtymology:
+    @patch("wiki_pipeline.llm_extractor.anthropic.Anthropic")
+    def test_returns_etymology_key(self, mock_cls):
+        extractor = LlmExtractor()
+        extractor.client.messages.create.return_value = _mock_response(
+            '{"etymology": "Named after Henry Hudson who explored it in 1609."}'
+        )
+        result = extractor.extract_etymology("The Hudson River is a river in New York...")
+        assert result["etymology"] == "Named after Henry Hudson who explored it in 1609."
+
+    @patch("wiki_pipeline.llm_extractor.anthropic.Anthropic")
+    def test_null_returns_none(self, mock_cls):
+        extractor = LlmExtractor()
+        extractor.client.messages.create.return_value = _mock_response('{"etymology": null}')
+        result = extractor.extract_etymology("Some river text.")
+        assert result == {"etymology": None}
+
+    @patch("wiki_pipeline.llm_extractor.anthropic.Anthropic")
+    def test_malformed_json_returns_none(self, mock_cls):
+        extractor = LlmExtractor()
+        extractor.client.messages.create.return_value = _mock_response("not json")
+        result = extractor.extract_etymology("Some river text.")
+        assert result == {"etymology": None}
+
+    @patch("wiki_pipeline.llm_extractor.anthropic.Anthropic")
+    def test_non_english_lang_hint(self, mock_cls):
+        extractor = LlmExtractor()
+        extractor.client.messages.create.return_value = _mock_response('{"etymology": "Du Latin flumen."}')
+        result = extractor.extract_etymology("Un fleuve en France.", lang="fr")
+        assert result["etymology"] is not None
+        call_args = extractor.client.messages.create.call_args
+        prompt = call_args[1]["messages"][0]["content"]
+        assert "non-English" in prompt
+
+
 class TestExtractJson:
     def test_plain_json(self):
         assert _extract_json('{"a": 1}') == '{"a": 1}'

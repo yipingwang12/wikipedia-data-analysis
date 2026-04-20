@@ -598,3 +598,110 @@ class TestPipelineThreeTierExtraction:
 
         mock_nlp.assert_not_called()
         mock_llm_cls.return_value.extract_missing.assert_not_called()
+
+
+class TestPipelineEtymologyMode:
+    """Etymology mode: section parser → lead scan → LLM fallback chain."""
+
+    def _setup(self, tmp_path, mock_download, mock_page, mock_lt, mock_catlinks,
+               mock_filter, mock_api_cls, wikitext="", plaintext=""):
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = ({}, {1: ("Mississippi_River", 6000)})
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(cat_pages={"Test_Category": {1}})
+        mock_filter.return_value = [PageInfo(1, "Mississippi_River", 6000)]
+        api = mock_api_cls.return_value
+        api.fetch_wikitext_batch.return_value = {"Mississippi River": wikitext}
+        api.fetch_plaintext_batch.return_value = {"Mississippi River": plaintext}
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.WikiApiClient")
+    @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_etymology_section_skips_nlp_and_llm(
+        self, mock_dotenv, mock_nlp, mock_llm_cls, mock_api_cls,
+        mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
+    ):
+        """When etymology section found, NLP and LLM are not called."""
+        wikitext = (
+            "The Mississippi River is a major river.\n\n"
+            "== Etymology ==\n"
+            "The name derives from the Ojibwe word ''misi-ziibi'' meaning 'Great River'.\n"
+        )
+        self._setup(tmp_path, mock_download, mock_page, mock_lt, mock_catlinks,
+                    mock_filter, mock_api_cls, wikitext=wikitext, plaintext="text")
+
+        config = _config(tmp_path, extraction_mode="etymology",
+                         required_fields=("etymology",))
+        result = run(config)
+
+        assert result is not None
+        content = _read_xlsx_text(result)
+        assert "Ojibwe" in content
+        mock_nlp.assert_not_called()
+        mock_llm_cls.return_value.extract_missing.assert_not_called()
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.WikiApiClient")
+    @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_etymology_lead_fallback_skips_llm(
+        self, mock_dotenv, mock_nlp, mock_llm_cls, mock_api_cls,
+        mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
+    ):
+        """When no section but lead has etymology, LLM is not called."""
+        plaintext = (
+            "The Ohio River is a major river. "
+            "The name derives from the Seneca word 'ohiiyo' meaning 'great river'. "
+            "It forms the boundary between Ohio and Kentucky."
+        )
+        self._setup(tmp_path, mock_download, mock_page, mock_lt, mock_catlinks,
+                    mock_filter, mock_api_cls, wikitext="No section.", plaintext=plaintext)
+
+        config = _config(tmp_path, extraction_mode="etymology",
+                         required_fields=("etymology",))
+        result = run(config)
+
+        assert result is not None
+        content = _read_xlsx_text(result)
+        assert "Seneca" in content
+        mock_llm_cls.return_value.extract_etymology.assert_not_called()
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.WikiApiClient")
+    @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_etymology_llm_fallback_when_no_section_or_lead(
+        self, mock_dotenv, mock_nlp, mock_llm_cls, mock_api_cls,
+        mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
+    ):
+        """When no section and no lead etymology, LLM is called."""
+        self._setup(tmp_path, mock_download, mock_page, mock_lt, mock_catlinks,
+                    mock_filter, mock_api_cls,
+                    wikitext="No section.", plaintext="The river flows south.")
+        mock_llm_cls.return_value.extract_etymology.return_value = {
+            "etymology": "Named by early explorers."
+        }
+
+        config = _config(tmp_path, extraction_mode="etymology",
+                         required_fields=("etymology",))
+        result = run(config)
+
+        assert result is not None
+        mock_llm_cls.return_value.extract_etymology.assert_called_once()
+        mock_nlp.assert_not_called()
