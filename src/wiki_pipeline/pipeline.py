@@ -312,14 +312,14 @@ def run(config: PipelineConfig) -> Path | None:
                 lead_text = extract_etymology_from_lead(plaintext)
                 if lead_text:
                     fields["etymology"] = lead_text
-            if fields.get("etymology") is None and plaintext:
+            if fields.get("etymology") is None and plaintext and not config.no_llm:
                 fields = llm.extract_etymology(plaintext, lang=wiki_to_lang(config.wiki))
         else:
             has_gaps = any(v is None for v in fields.values())
             if has_gaps and plaintext:
                 fields = extract_from_text(plaintext, fields, required_fields)
                 has_gaps = any(v is None for v in fields.values())
-                if has_gaps:
+                if has_gaps and not config.no_llm:
                     fields = llm.extract_missing(
                         plaintext, fields, required_fields,
                         lang=wiki_to_lang(config.wiki),

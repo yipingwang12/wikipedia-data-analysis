@@ -47,6 +47,7 @@ class PipelineConfig:
     use_api: bool = False
     use_multistream: bool = True
     limit: int | None = None
+    no_llm: bool = False
 
     @property
     def search_mode(self) -> str:
@@ -90,6 +91,8 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                     help="Use legacy full-scan dump reader instead of multistream index (default: multistream)")
     p.add_argument("--limit", type=int, default=None,
                     help="Stop after extracting N articles (useful for testing)")
+    p.add_argument("--no-llm", action="store_true",
+                    help="Skip LLM fallback; leave fields None when section/NLP parsing fails")
     p.add_argument("--all", action="store_true",
                     help="Load all pattern files for the extraction mode (default when using dump reader in bio mode)")
     args = p.parse_args(argv)
@@ -172,4 +175,5 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
         use_api=args.use_api,
         use_multistream=not args.no_multistream,
         limit=args.limit,
+        no_llm=args.no_llm,
     )
