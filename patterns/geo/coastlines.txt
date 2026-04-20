@@ -1,0 +1,7 @@
+(?:^|_)Coastlines(?:_of_|_in_)
+(?:^|_)Coasts(?:_of_|_in_)
+(?:^|_)Beaches(?:_of_|_in_)
+(?:^|_)Bays(?:_of_|_in_)
+(?:^|_)Gulfs(?:_of_|_in_)
+(?:^|_)Capes(?:_of_|_in_)
+(?:^|_)Peninsulas(?:_of_|_in_)

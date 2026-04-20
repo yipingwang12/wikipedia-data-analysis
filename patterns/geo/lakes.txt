@@ -1,0 +1,4 @@
+(?:^|_)Lakes(?:_of_|_in_)
+(?:^|_)Reservoirs(?:_of_|_in_)
+(?:^|_)Lagoons(?:_of_|_in_)
+(?:^|_)Ponds(?:_of_|_in_)

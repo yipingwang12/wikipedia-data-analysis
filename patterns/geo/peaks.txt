@@ -1,0 +1,5 @@
+(?:^|_)Mountains(?:_of_|_in_)
+(?:^|_)Peaks(?:_of_|_in_)
+(?:^|_)Summits(?:_of_|_in_)
+(?:^|_)Volcanoes(?:_of_|_in_)
+(?:^|_)Hills(?:_of_|_in_)
