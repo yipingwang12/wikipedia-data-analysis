@@ -1,25 +1,46 @@
-"""Claude Haiku fallback extractor for missing infobox fields."""
+"""Ollama fallback extractor for missing infobox fields."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import re
+import time
 
-import anthropic
+import requests
 
 logger = logging.getLogger(__name__)
 
 
 class LlmExtractor:
-    def __init__(self, model: str = "claude-haiku-4-5-20251001"):
-        self._client = None
-        self.model = model
+    def __init__(
+        self,
+        model: str | None = None,
+        base_url: str | None = None,
+        timeout: int = 120,
+        max_retries: int = 3,
+    ):
+        self.model = model or os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+        self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
+        self.timeout = timeout
+        self.max_retries = max_retries
 
-    @property
-    def client(self) -> anthropic.Anthropic:
-        if self._client is None:
-            self._client = anthropic.Anthropic()
-        return self._client
+    def _generate_json(self, prompt: str) -> dict:
+        url = f"{self.base_url}/api/generate"
+        payload = {"model": self.model, "prompt": prompt, "stream": False, "format": "json"}
+        for attempt in range(self.max_retries):
+            try:
+                resp = requests.post(url, json=payload, timeout=self.timeout)
+                resp.raise_for_status()
+                return _parse_json(resp.json()["response"])
+            except (requests.RequestException, KeyError) as e:
+                if attempt == self.max_retries - 1:
+                    raise
+                wait = 2 ** attempt
+                logger.warning("Ollama attempt %d failed, retrying in %ds: %s", attempt + 1, wait, e)
+                time.sleep(wait)
+        return {}
 
     def extract_missing(
         self,
@@ -28,10 +49,7 @@ class LlmExtractor:
         required_fields: tuple[str, ...] | list[str],
         lang: str = "en",
     ) -> dict[str, str | None]:
-        """Fill in None-valued fields using Claude Haiku on truncated plain text.
-
-        Returns merged dict with existing values preserved and gaps filled where possible.
-        """
+        """Fill in None-valued fields using Ollama on truncated plain text."""
         missing = [f for f in required_fields if existing.get(f) is None]
         if not missing:
             return dict(existing)
@@ -41,21 +59,12 @@ class LlmExtractor:
         prompt = (
             f"Extract these fields from the biography text below.{lang_hint} "
             f"Return ONLY a JSON object with these keys: {', '.join(missing)}. "
-            f"Use null for any field you cannot determine.\n\n"
-            f"Text:\n{truncated}"
+            f"Use null for any field you cannot determine.\n\nText:\n{truncated}"
         )
 
         try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=256,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = response.content[0].text.strip()
-            # Extract JSON from response (may be wrapped in markdown code block)
-            text = _extract_json(text)
-            data = json.loads(text)
-        except (json.JSONDecodeError, anthropic.APIError, ImportError, IndexError, KeyError) as e:
+            data = self._generate_json(prompt)
+        except Exception as e:
             logger.warning("LLM extraction failed: %s", e)
             return dict(existing)
 
@@ -66,31 +75,22 @@ class LlmExtractor:
                 result[f] = val.strip()
         return result
 
-
     def extract_etymology(
         self,
         plain_text: str,
         lang: str = "en",
     ) -> dict[str, str | None]:
-        """Extract etymology/name-origin from plain text using Claude."""
+        """Extract etymology/name-origin from plain text using Ollama."""
         truncated = plain_text[:3000]
         lang_hint = " The text may be in a non-English language." if lang != "en" else ""
         prompt = (
             f"Extract the etymology or origin of the name from the geographic feature article below.{lang_hint} "
             f"Return ONLY a JSON object with a single key 'etymology' whose value is a concise "
-            f"1-3 sentence explanation of how the place got its name, or null if not determinable.\n\n"
-            f"Text:\n{truncated}"
+            f"1-3 sentence explanation of how the place got its name, or null if not determinable.\n\nText:\n{truncated}"
         )
         try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=256,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = response.content[0].text.strip()
-            text = _extract_json(text)
-            data = json.loads(text)
-        except (json.JSONDecodeError, anthropic.APIError, ImportError, IndexError, KeyError) as e:
+            data = self._generate_json(prompt)
+        except Exception as e:
             logger.warning("LLM etymology extraction failed: %s", e)
             return {"etymology": None}
         val = data.get("etymology")
@@ -99,17 +99,14 @@ class LlmExtractor:
         return {"etymology": None}
 
 
-def _extract_json(text: str) -> str:
-    """Strip markdown code fences if present."""
-    if "```" in text:
-        lines = text.split("\n")
-        inside = False
-        json_lines = []
-        for line in lines:
-            if line.strip().startswith("```"):
-                inside = not inside
-                continue
-            if inside:
-                json_lines.append(line)
-        return "\n".join(json_lines)
-    return text
+def _parse_json(text: str) -> dict:
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    cleaned = re.sub(r",\s*([}\]])", r"\1", text)
+    return json.loads(cleaned)

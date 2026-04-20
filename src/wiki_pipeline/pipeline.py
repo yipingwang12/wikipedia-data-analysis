@@ -345,7 +345,7 @@ def run(config: PipelineConfig) -> Path | None:
         record["word_count"] = len(plaintext.split()) if plaintext else 0
         return record
 
-    llm = LlmExtractor(model=config.claude_model)
+    llm = LlmExtractor(model=config.ollama_model, base_url=config.ollama_base_url)
     title_to_length = {p.title.replace("_", " "): p.length for p in pages}
 
     # Per-pattern-group extraction + output (auto mode with groups)

@@ -78,7 +78,7 @@ class TestParseArgs:
             "--results-dir", "/tmp/results",
             "--api-batch-size", "25",
             "--api-rate-limit", "0.5",
-            "--claude-model", "custom-model",
+            "--ollama-model", "custom-model",
             "--required-fields", "birth_date", "nationality",
             "--output-format", "tsv",
             "--dry-run",

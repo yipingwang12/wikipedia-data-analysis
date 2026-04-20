@@ -12,3 +12,4 @@ build/
 *.partial
 .venv/
 pytest-of-*/
+.worktrees/

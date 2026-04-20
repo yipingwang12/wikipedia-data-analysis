@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,7 +31,9 @@ class PipelineConfig:
     wiki_api_url: str = "https://en.wikipedia.org/w/api.php"
     api_batch_size: int = 50
     api_rate_limit_s: float = 0.1
-    claude_model: str = "claude-haiku-4-5-20251001"
+    # Model/endpoint read from env vars; canonical values in ~/Documents/Projects/.env
+    ollama_model: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "llama3.1:8b"))
+    ollama_base_url: str = field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
     required_fields: tuple[str, ...] = (
         "birth_date",
         "death_date",
@@ -71,7 +74,10 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     p.add_argument("--results-dir", type=Path, default=Path("results/pipeline"))
     p.add_argument("--api-batch-size", type=int, default=50)
     p.add_argument("--api-rate-limit", type=float, default=0.1)
-    p.add_argument("--claude-model", default="claude-haiku-4-5-20251001")
+    p.add_argument("--ollama-model", default=None,
+                    help="Ollama model (default: OLLAMA_MODEL env var or llama3.1:8b)")
+    p.add_argument("--ollama-base-url", default=None,
+                    help="Ollama base URL (default: OLLAMA_BASE_URL env var or http://localhost:11434)")
     p.add_argument("--extraction-mode",
                     choices=["bio", "geo", "etymology", "battle", "exploration", "astronomy", "biology", "math", "auto"],
                     default="auto",
@@ -163,7 +169,8 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
         results_dir=args.results_dir,
         api_batch_size=args.api_batch_size,
         api_rate_limit_s=args.api_rate_limit,
-        claude_model=args.claude_model,
+        ollama_model=args.ollama_model or os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
+        ollama_base_url=args.ollama_base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         required_fields=required_fields,
         extraction_mode=args.extraction_mode,
         output_format=args.output_format,

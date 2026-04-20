@@ -17,7 +17,7 @@ Traditional BFS from a single root category with optional `--max-depth` limit. P
 3. **Search** — Regex pattern matching on category names (default) OR BFS traversal from root category
 4. **Filter** — In-memory filter by length/namespace from cached page_meta (default min 5000 bytes, excludes stubs)
 5. **Fetch** — Multistream bz2 reader (default) or batch API fetch
-6. **Extract** — Infobox parsing (primary) → NLP regex extraction (secondary, bio mode only) → Claude LLM fallback (tertiary) → date normalization
+6. **Extract** — Infobox parsing (primary) → NLP regex extraction (secondary, bio mode only) → Ollama LLM fallback (tertiary) → date normalization
 7. **Output** — Per-pattern-file Excel (default), or single CSV/TSV. Includes article_bytes, word_count, date note columns
 8. **Transform** (optional) — CSV → `wikipedia.json` keyed by GADM GID_2 for map integration
 
@@ -120,7 +120,7 @@ src/wiki_pipeline/
   geo_infobox_parser.py  # geographic infobox config (settlement/city/county/etc.)
   extractors.py          # battle/exploration/astronomy/biology/math infobox configs + registry
   nlp_extractor.py       # regex extraction from first-sentence biographical patterns
-  llm_extractor.py       # Claude Haiku fallback for missing fields
+  llm_extractor.py       # Ollama fallback for missing fields
   output.py              # Excel/CSV/TSV writer (per-pattern-file xlsx default)
 
 scripts/
@@ -180,7 +180,7 @@ Three-tier field extraction for birth_date, death_date, nationality, occupation:
 
 1. **Infobox parsing** — `mwparserfromhell` extracts from structured Wikipedia infoboxes with field alias support (e.g., `born` → `birth_date`). Handles `{{birth date}}` templates, wikilink/ref stripping.
 2. **NLP regex extraction** — pattern-based extraction from the first paragraph. Exploits Wikipedia's consistent biographical first-sentence convention (`Name (DATE – DATE) was a [nationality] [occupation]`). Handles date normalization to ISO, "or" dates (picks earliest birth/latest death), parentheticals with place names, `(born DATE – DATE)` patterns, compound nationalities ("Polish and naturalised-French"), qualified occupations ("theoretical physicist"), and "of [nationality] origin/descent" postfix patterns. Uses ~200 nationality and ~150 occupation lookup entries. Zero external dependencies.
-3. **Claude LLM fallback** — sends truncated plaintext to Claude Haiku for remaining gaps. Requires Anthropic API key (separate billing from Claude subscription).
+3. **Ollama LLM fallback** — sends truncated plaintext to a local Ollama model for remaining gaps. Model/endpoint configured via `OLLAMA_MODEL` / `OLLAMA_BASE_URL` env vars; canonical values in `~/Documents/Projects/.env`.
 
 ### Extraction benchmarks (1000 random visual artist articles)
 

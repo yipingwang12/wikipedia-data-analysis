@@ -13,7 +13,7 @@ src/wiki_pipeline/
 ├── cache.py          # mtime-validated pickle cache (~1.8 GB for enwiki)
 ├── search.py         # regex + BFS category search
 ├── fetch.py          # multistream bz2 reader (default) or batch API
-├── extract/          # infobox parser → NLP regex → Claude LLM fallback
+├── extract/          # infobox parser → NLP regex → Ollama LLM fallback
 └── output.py         # Excel / CSV / TSV writer
 ```
 
@@ -31,6 +31,10 @@ src/wiki_pipeline/
 ## Dagster integration
 
 `transform.py` is imported directly by the orchestrator (`from wiki_pipeline.transform import transform`). Changes here require `dagster dev` restart in `personal-project-orchestrator/` (editable install, no hot reload).
+
+## LLM config
+
+Ollama model and endpoint are read from `OLLAMA_MODEL` / `OLLAMA_BASE_URL` env vars (canonical values in `~/Documents/Projects/.env`). Override per-run via CLI flags `--ollama-model` / `--ollama-base-url`, or set `PPO_SKIP_LLM=1` in the orchestrator to skip LLM entirely.
 
 ## Key facts
 
