@@ -144,9 +144,9 @@ _ANY_DATE_RE = re.compile(rf"(?:c\.\s*)?(?:{_FULL_DATE}|\d{{3,4}})", re.IGNORECA
 # Separator with surrounding whitespace (for splitting parenthetical halves)
 _MAIN_SEP_RE = re.compile(r"\s+[\u2013\u2014\-]\s+")
 
-# "was a/an ..." or "is a/an ..." clause
+# "was a/an/the ..." or "is a/an/the ..." clause
 _WAS_A_RE = re.compile(
-    r"(?:was|is)\s+(?:a|an)\s+(.*?)(?:\s+who\b|\s+that\b|\s+whose\b|\s+best\b|\s+widely\b|\s+known\b|\.\s|,\s+(?:who\b|whose\b|born\b|and\s+(?:the\b|a\b|founder\b|one\b|co-))|$)",
+    r"(?:was|is)\s+(?:a|an|the)\s+(.*?)(?:\s+who\b|\s+that\b|\s+whose\b|\s+best\b|\s+widely\b|\s+known\b|\.\s|,\s+(?:who\b|whose\b|born\b|and\s+(?:the\b|a\b|founder\b|one\b|co-))|$)",
     re.IGNORECASE,
 )
 

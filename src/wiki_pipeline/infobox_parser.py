@@ -19,6 +19,10 @@ BIO_CONFIG = InfoboxConfig(
         "infobox actor",
         "infobox architect",
         "infobox composer",
+        "infobox royalty",
+        "infobox monarch",
+        "infobox noble",
+        "infobox pharaoh",
     }),
     field_aliases={
         "birth_date": ["birth_date", "born", "birthdate"],

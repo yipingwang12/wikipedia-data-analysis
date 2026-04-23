@@ -38,7 +38,12 @@ Ollama model and endpoint are read from `OLLAMA_MODEL` / `OLLAMA_BASE_URL` env v
 
 ## Key facts
 
-- Default wiki: `enwiki` — simplewiki lacks structured infobox templates (0 matches for any country)
+- Default wiki: `enwiki` — simplewiki uses `{{Infobox royalty}}` not `{{Infobox person}}`, so rulers were silently missing until fix below
 - Cache pickles: 4 × ~1.7 GB total; must exist before smoke runs
 - Full enwiki dump: ~22 GB compressed (not committed)
 - Pattern files in `patterns/` cover 13 biographical categories + 5 geo categories
+
+## Known extraction fixes
+
+- **`infobox_parser.py`**: added `infobox royalty`, `infobox monarch`, `infobox noble`, `infobox pharaoh` to `BIO_CONFIG.infobox_names` — previously these templates were unrecognised and all fields returned `None`
+- **`nlp_extractor.py`**: `_WAS_A_RE` now matches `"was/is the ..."` in addition to `"was/is a/an ..."` — simplewiki ruler articles use the definite article ("was the King of England") which the old regex missed

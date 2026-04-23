@@ -93,3 +93,50 @@ class TestExtractInfoboxFields:
 }}"""
         result = extract_infobox_fields(wikitext, ("nationality",))
         assert result["nationality"] is None
+
+    def test_royalty_infobox(self):
+        # Plain-text dates are returned as-is by the infobox parser; the NLP
+        # extractor normalises them in the full pipeline.
+        wikitext = """{{Infobox royalty
+| name         = Henry VIII
+| birth_date   = 28 June 1491
+| death_date   = 28 January 1547
+| nationality  = English
+| occupation   = King
+}}"""
+        result = extract_infobox_fields(wikitext, REQUIRED)
+        assert result["birth_date"] is not None
+        assert result["death_date"] is not None
+        assert result["nationality"] == "English"
+        assert result["occupation"] == "King"
+
+    def test_monarch_infobox_template_dates(self):
+        # {{birth date|...}} templates are resolved to ISO format.
+        wikitext = """{{Infobox monarch
+| name       = Charlemagne
+| birth_date = {{birth date|748|4|2|df=y}}
+| death_date = {{death date|814|1|28|df=y}}
+}}"""
+        result = extract_infobox_fields(wikitext, REQUIRED)
+        assert result["birth_date"] == "748-04-02"
+        assert result["death_date"] == "814-01-28"
+
+    def test_noble_infobox(self):
+        wikitext = """{{Infobox noble
+| name       = William the Conqueror
+| birth_date = c. 1028
+| death_date = 9 September 1087
+}}"""
+        result = extract_infobox_fields(wikitext, REQUIRED)
+        assert result["birth_date"] is not None
+        assert result["death_date"] is not None
+
+    def test_pharaoh_infobox(self):
+        wikitext = """{{Infobox pharaoh
+| name       = Ramesses II
+| birth_date = c. 1303 BC
+| death_date = 1213 BC
+}}"""
+        result = extract_infobox_fields(wikitext, REQUIRED)
+        assert result["birth_date"] is not None
+        assert result["death_date"] is not None

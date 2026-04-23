@@ -225,6 +225,23 @@ class TestOccupationExtraction:
         assert "sculptor" in result["occupation"]
         assert "architect" in result["occupation"]
 
+    def test_was_the_king(self):
+        # Simplewiki uses "was the King" (definite article) for unique titleholders
+        text = "Henry VIII (28 June 1491 – 28 January 1547) was the King of England from 1509 until his death."
+        result = extract_from_text(text, dict(ALL_NONE), REQUIRED)
+        assert result["occupation"] == "king"
+
+    def test_was_the_emperor(self):
+        text = "Charlemagne (2 April 748 – 28 January 814) was the first Holy Roman Emperor."
+        result = extract_from_text(text, dict(ALL_NONE), REQUIRED)
+        assert result["occupation"] == "emperor"
+
+    def test_was_the_does_not_extract_non_occupation(self):
+        # "was the cause of" should not produce an occupation
+        text = "The battle (1066) was the cause of significant upheaval."
+        result = extract_from_text(text, dict(ALL_NONE), REQUIRED)
+        assert result["occupation"] is None
+
 
 # ---------------------------------------------------------------------------
 # Real Wikipedia examples (integration)
