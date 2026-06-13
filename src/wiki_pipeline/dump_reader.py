@@ -183,22 +183,55 @@ _BATCH_READ_THRESHOLD = 2 * 1024 * 1024  # 2 MB — merge reads within this gap
 
 
 def _decompress_blocks_from_buffer(
-    buf: bytes,
-    block_local_offsets: list[int],
+    dump_path,
+    block_global_offsets: list[int],
+    *,
+    local_buf: bytes | None = None,
+    batch_start: int = 0,
 ) -> list[bytes]:
-    """Decompress multiple bz2 blocks from a single pre-read buffer.
+    """Decompress multiple bz2 blocks, extending reads if a block spans beyond the buffer.
 
-    block_local_offsets: byte offsets within buf where each block starts.
+    Args:
+        dump_path: path to the dump file (used to extend reads when block > buffer); may be
+            None only when local_buf contains the complete block data.
+        block_global_offsets: absolute file offsets for each block.
+        local_buf: pre-read bytes starting at batch_start. When None the function reads from
+            dump_path using block_global_offsets directly.
+        batch_start: file offset of byte 0 in local_buf.
     """
+    # Build a list of (global_offset, local_offset) pairs
+    if local_buf is not None:
+        pairs = [(off, off - batch_start) for off in block_global_offsets]
+        buf = local_buf
+    else:
+        # Convenience: treat block_global_offsets as local offsets into a non-existent buf
+        pairs = [(off, off) for off in block_global_offsets]
+        buf = b""
+
     results = []
-    for local_offset in block_local_offsets:
+    for global_offset, local_offset in pairs:
         decompressor = bz2.BZ2Decompressor()
         pos = local_offset
         chunks = []
-        while not decompressor.eof and pos < len(buf):
+
+        while not decompressor.eof:
             end = min(pos + 65536, len(buf))
-            chunks.append(decompressor.decompress(buf[pos:end]))
-            pos = end
+            if pos >= len(buf):
+                # Buffer exhausted before block eof — read more from file
+                if dump_path is None:
+                    break  # caller promised buf is complete; stop
+                with open(dump_path, "rb") as _f:
+                    _f.seek(global_offset + (pos - local_offset))
+                    extra = _f.read(65536)
+                if not extra:
+                    break
+                chunks.append(decompressor.decompress(extra))
+                pos += len(extra)
+            else:
+                chunk = decompressor.decompress(buf[pos:end])
+                chunks.append(chunk)
+                pos = end
+
         results.append(b"".join(chunks))
     return results
 
@@ -268,8 +301,9 @@ def read_articles_multistream(
             f.seek(batch_start)
             buf = f.read(batch_end - batch_start)
 
-            local_offsets = [off - batch_start for off in batch]
-            block_data_list = _decompress_blocks_from_buffer(buf, local_offsets)
+            block_data_list = _decompress_blocks_from_buffer(
+                dump_path, batch, local_buf=buf, batch_start=batch_start
+            )
 
             for offset, block_data in zip(batch, block_data_list):
                 block_pages = _extract_pages_from_block(block_data)

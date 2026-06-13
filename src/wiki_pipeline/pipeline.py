@@ -265,17 +265,17 @@ def run(config: PipelineConfig) -> Path | None:
         "geo": extract_geo_infobox_fields,
         "etymology": extract_etymology_fields,
     }
-    for stem, (fn, _) in EXTRACTOR_REGISTRY.items():
-        # Map pattern stems to extraction mode names
-        _stem_to_mode = {
-            "battles_wars_conflicts": "battle",
-            "explorations_voyages_spacecraft": "exploration",
-            "astronomy": "astronomy",
-            "biology": "biology",
-            "mathematics_statistics": "math",
-        }
+    # Map pattern stems to extraction mode names (built once, not per-iteration)
+    _stem_to_mode = {
+        "battles_wars_conflicts": "battle",
+        "explorations_voyages_spacecraft": "exploration",
+        "astronomy": "astronomy",
+        "biology": "biology",
+        "mathematics_statistics": "math",
+    }
     for stem, mode in _stem_to_mode.items():
-        _MODE_EXTRACTORS[mode] = EXTRACTOR_REGISTRY[stem][0]
+        if stem in EXTRACTOR_REGISTRY:
+            _MODE_EXTRACTORS[mode] = EXTRACTOR_REGISTRY[stem][0]
 
     _MODE_FIELDS = {
         "bio": ("birth_date", "death_date", "nationality", "occupation"),
@@ -283,7 +283,8 @@ def run(config: PipelineConfig) -> Path | None:
         "etymology": ("etymology",),
     }
     for stem, (_, fields) in EXTRACTOR_REGISTRY.items():
-        _MODE_FIELDS[_stem_to_mode[stem]] = fields
+        if stem in _stem_to_mode:
+            _MODE_FIELDS[_stem_to_mode[stem]] = fields
 
     _STEM_TO_MODE = {
         **_stem_to_mode,

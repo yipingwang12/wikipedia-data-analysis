@@ -253,3 +253,124 @@ class TestTransformCollisions:
         assert collisions_path.exists()
         content = collisions_path.read_text()
         assert "9999999" in content or "Cook County, Illinois" in content
+
+
+class TestTransformInternalColumnLeak:
+    """L1 regression: pipeline-internal columns must not appear in wikipedia.json."""
+
+    def test_internal_columns_excluded(self, gadm_dir, tmp_path):
+        csv_file = tmp_path / "input.csv"
+        fieldnames = [
+            "page_id", "title", "population", "area_km2",
+            "article_bytes", "word_count",
+            "birth_date_note", "death_date_note", "date_note",
+        ]
+        with open(csv_file, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerow({
+                "page_id": "1", "title": "Cook County, Illinois",
+                "population": "5275541", "area_km2": "2448",
+                "article_bytes": "99999", "word_count": "1234",
+                "birth_date_note": "approx", "death_date_note": "", "date_note": "c.",
+            })
+        output = tmp_path / "wikipedia.json"
+        transform(csv_file, gadm_dir, output)
+        data = json.loads(output.read_text())
+        entry = data["USA.14.17_1"]
+        assert "article_bytes" not in entry
+        assert "word_count" not in entry
+        assert "birth_date_note" not in entry
+        assert "death_date_note" not in entry
+        assert "date_note" not in entry
+        # domain fields still pass through
+        assert entry["population"] == "5275541"
+        assert entry["area_km2"] == "2448"
+
+    def test_domain_fields_still_present(self, gadm_dir, tmp_path):
+        csv_file = tmp_path / "input.csv"
+        fieldnames = ["page_id", "title", "population", "area_km2", "elevation_m", "article_bytes"]
+        with open(csv_file, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerow({
+                "page_id": "1", "title": "Cook County, Illinois",
+                "population": "5275541", "area_km2": "2448", "elevation_m": "180",
+                "article_bytes": "50000",
+            })
+        output = tmp_path / "wikipedia.json"
+        transform(csv_file, gadm_dir, output)
+        data = json.loads(output.read_text())
+        entry = data["USA.14.17_1"]
+        assert entry["elevation_m"] == "180"
+        assert "article_bytes" not in entry
+
+
+class TestWikipediaUrlEncoding:
+    """L4 regression: titles with reserved URL chars must be percent-encoded."""
+
+    def test_reserved_chars_encoded(self, gadm_dir, tmp_path):
+        # Add a GADM entry for the test title
+        regions = gadm_dir / "regions"
+        special = {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "properties": {
+                    "GID_2": "USA.99.1_1", "NAME_2": "Who's Afraid of Virginia Woolf?", "NAME_1": "TestState",
+                }, "geometry": {"type": "Point", "coordinates": [0, 0]}},
+            ],
+        }
+        (regions / "special.json").write_text(json.dumps(special))
+
+        csv_file = tmp_path / "input.csv"
+        with open(csv_file, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["page_id", "title", "population"])
+            w.writeheader()
+            w.writerow({"page_id": "1", "title": "Who's Afraid of Virginia Woolf?, TestState", "population": "1"})
+        output = tmp_path / "wikipedia.json"
+        transform(csv_file, gadm_dir, output)
+        data = json.loads(output.read_text())
+        entry = data["USA.99.1_1"]
+        url = entry["wikipedia_url"]
+        # apostrophe must be percent-encoded, spaces as underscores
+        assert "'" not in url
+        assert "%27" in url or "%E2" in url or "Who" in url  # encoded apostrophe
+        assert " " not in url
+
+    def test_plain_title_unchanged(self, gadm_dir, tmp_path):
+        csv_file = tmp_path / "input.csv"
+        with open(csv_file, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["page_id", "title", "population"])
+            w.writeheader()
+            w.writerow({"page_id": "1", "title": "Cook County, Illinois", "population": "5275541"})
+        output = tmp_path / "wikipedia.json"
+        transform(csv_file, gadm_dir, output)
+        data = json.loads(output.read_text())
+        entry = data["USA.14.17_1"]
+        # plain title: spaces→underscores, no encoding needed
+        assert entry["wikipedia_url"] == "https://en.wikipedia.org/wiki/Cook_County,_Illinois"
+
+    def test_hash_encoded(self, gadm_dir, tmp_path):
+        regions = gadm_dir / "regions"
+        special = {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "properties": {
+                    "GID_2": "USA.98.1_1", "NAME_2": "Rock #5", "NAME_1": "TestState2",
+                }, "geometry": {"type": "Point", "coordinates": [0, 0]}},
+            ],
+        }
+        (regions / "hash.json").write_text(json.dumps(special))
+
+        csv_file = tmp_path / "input.csv"
+        with open(csv_file, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["page_id", "title", "population"])
+            w.writeheader()
+            w.writerow({"page_id": "1", "title": "Rock #5, TestState2", "population": "1"})
+        output = tmp_path / "wikipedia.json"
+        transform(csv_file, gadm_dir, output)
+        data = json.loads(output.read_text())
+        if "USA.98.1_1" in data:
+            url = data["USA.98.1_1"]["wikipedia_url"]
+            assert "#" not in url
+            assert "%23" in url

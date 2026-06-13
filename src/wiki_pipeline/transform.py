@@ -7,8 +7,13 @@ import json
 import logging
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 from .config import wiki_to_lang
+
+# L1: pipeline-internal columns excluded from wikipedia.json output
+_INTERNAL_COLUMNS = frozenset({"article_bytes", "word_count"})
+_NOTE_SUFFIX = "_note"
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +96,12 @@ def transform(csv_path: Path, gadm_data_dir: Path, output_path: Path, wiki: str 
 
     with open(csv_path) as f:
         reader = csv.DictReader(f)
-        fields = [c for c in (reader.fieldnames or []) if c not in ("page_id", "title")]
+        fields = [
+            c for c in (reader.fieldnames or [])
+            if c not in ("page_id", "title")
+            and c not in _INTERNAL_COLUMNS
+            and not c.endswith(_NOTE_SUFFIX)
+        ]
 
         for row in reader:
             title = row.get("title", "")
@@ -116,9 +126,10 @@ def transform(csv_path: Path, gadm_data_dir: Path, output_path: Path, wiki: str 
                 if val:
                     entry[field] = val
             lang = wiki_to_lang(wiki)
-            entry["wikipedia_url"] = (
-                f"https://{lang}.wikipedia.org/wiki/" + title.replace(" ", "_")
-            )
+            # L4: replace spaces with underscores then percent-encode reserved chars
+            # Wikipedia uses commas unencoded in article titles; safe chars match WP convention
+            url_title = quote(title.replace(" ", "_"), safe="_/:,")
+            entry["wikipedia_url"] = f"https://{lang}.wikipedia.org/wiki/{url_title}"
             result[gid2] = entry
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

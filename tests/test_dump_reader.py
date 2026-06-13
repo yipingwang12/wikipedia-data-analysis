@@ -12,6 +12,7 @@ from wiki_pipeline.dump_reader import (
     _article_dump_name,
     _convert_to_plaintext,
     _decompress_bz2_block,
+    _decompress_blocks_from_buffer,
     _extract_pages_from_block,
     load_multistream_index,
     read_articles_from_dump,
@@ -418,6 +419,67 @@ class TestReadArticlesMultistream:
         )
         assert "'''" not in plaintext["Article Two"]
         assert "article two" in plaintext["Article Two"]
+
+
+class TestDecompressBlocksFromBuffer:
+    """L2 regression: blocks larger than the initial read window must not be silently truncated."""
+
+    def test_block_larger_than_buffer_completes(self, tmp_path):
+        """A bz2 block whose compressed size > 2MB read window must still decompress fully."""
+        # Build a block with enough uncompressed data that we can simulate truncation.
+        # We won't actually create 2MB, but we verify the fix: _decompress_blocks_from_buffer
+        # falls back to reading more from the file when the buffer is exhausted mid-block.
+        content = b"X" * (3 * 1024 * 1024)  # 3 MB uncompressed
+        compressed = bz2.compress(content)
+
+        dump_path = tmp_path / "big_block.bz2"
+        dump_path.write_bytes(compressed)
+
+        # Simulate a buffer that only contains a prefix of the block
+        buf_truncated = compressed[:len(compressed) // 2]
+
+        # With the old code (buffer only), decompression would stop before eof
+        decompressor = bz2.BZ2Decompressor()
+        pos = 0
+        chunks = []
+        while not decompressor.eof and pos < len(buf_truncated):
+            end = min(pos + 65536, len(buf_truncated))
+            chunks.append(decompressor.decompress(buf_truncated[pos:end]))
+            pos = end
+        truncated_result = b"".join(chunks)
+        assert not decompressor.eof, "Buffer-truncated decompression should NOT reach eof"
+        assert len(truncated_result) < len(content), "Truncated result should be smaller than original"
+
+        # With the fix: _decompress_blocks_from_buffer reads from file when buffer exhausted
+        result = _decompress_blocks_from_buffer(dump_path, [0], local_buf=buf_truncated)
+        assert result[0] == content, "Fixed function must return full decompressed content"
+
+    def test_small_block_within_buffer(self):
+        """Blocks that fit within the buffer must still decompress correctly."""
+        content = b"Small block content"
+        compressed = bz2.compress(content)
+        # Buffer contains the full block
+        result = _decompress_blocks_from_buffer(None, [0], local_buf=compressed)
+        assert result[0] == content
+
+    def test_multistream_large_block_not_dropped(self, tmp_path):
+        """read_articles_multistream must return articles from large blocks."""
+        # Build a page with large wikitext so block > 2MB (uncompressed)
+        big_text = "A" * (3 * 1024 * 1024)
+        pages = [
+            [(100, "Big Article", big_text)],
+        ]
+        dump_bytes, index_text = _make_multistream_dump(pages)
+
+        dump_path = tmp_path / "big_dump.bz2"
+        dump_path.write_bytes(dump_bytes)
+        index_path = tmp_path / "big_index.txt"
+        index_path.write_text(index_text)
+
+        index = load_multistream_index(index_path)
+        wikitext, _ = read_articles_multistream(dump_path, index, {100})
+        assert "Big Article" in wikitext
+        assert wikitext["Big Article"] == big_text
 
 
 # --- _convert_to_plaintext ---
