@@ -435,6 +435,42 @@ class TestNormalizeDate:
         assert normalize_date("1040}} ()}} (aged around 75)") == "1040"
 
 
+class TestMultiWordNationalities:
+    """M1 regression: multi-word nationalities must match, not leak into occupation."""
+
+    def test_new_zealand_poet(self):
+        text = "John Smith (1900-1980) was a New Zealand poet."
+        result = extract_from_text(text, dict(ALL_NONE), REQUIRED)
+        assert result["nationality"] == "New Zealand"
+        assert result["occupation"] == "poet"
+        assert "zealand" not in (result["occupation"] or "").lower()
+
+    def test_south_african_writer(self):
+        text = "Jane Doe (1920-2000) was a South African writer."
+        result = extract_from_text(text, dict(ALL_NONE), REQUIRED)
+        assert result["nationality"] == "South African"
+        assert result["occupation"] == "writer"
+        assert "african" not in (result["occupation"] or "").lower()
+
+    def test_north_korean_diplomat(self):
+        text = "Kim Lee (1950-2010) was a North Korean diplomat."
+        result = extract_from_text(text, dict(ALL_NONE), REQUIRED)
+        assert result["nationality"] == "North Korean"
+        assert result["occupation"] == "diplomat"
+
+    def test_south_korean_actor(self):
+        text = "Park Ji (1980-2020) was a South Korean actor."
+        result = extract_from_text(text, dict(ALL_NONE), REQUIRED)
+        assert result["nationality"] == "South Korean"
+        assert result["occupation"] == "actor"
+
+    def test_papua_new_guinean(self):
+        text = "John Doe (1955-2015) was a Papua New Guinean politician."
+        result = extract_from_text(text, dict(ALL_NONE), REQUIRED)
+        assert result["nationality"] == "Papua New Guinean"
+        assert result["occupation"] == "politician"
+
+
 class TestNormalizeDateWithNote:
     def test_decade(self):
         assert normalize_date_with_note("1900s") == ("1900-01-01", "~1900s")

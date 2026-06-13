@@ -67,6 +67,35 @@ class TestDownloadDump:
         assert calls == [60, 120]
 
     @responses.activate
+    def test_resume_server_ignores_range_restarts_cleanly(self, tmp_path: Path):
+        """M2 regression: server returning 200 (not 206) must overwrite, not append."""
+        url = "https://dumps.wikimedia.org/test.sql.gz"
+        dest = tmp_path / "test.sql.gz"
+        partial = dest.with_suffix(".gz.partial")
+        # Stale partial — 3 bytes of a 10-byte file
+        partial.write_bytes(b"STA")
+        # Server ignores Range and returns 200 with full 10-byte body
+        responses.add(responses.HEAD, url, headers={"Content-Length": "10"})
+        responses.add(responses.GET, url, body=b"helloworld", status=200, stream=True)
+        result = download_dump(url, dest)
+        assert result == dest
+        assert dest.read_bytes() == b"helloworld"  # not b"STAhelloworld"
+
+    @responses.activate
+    def test_resume_206_appends_correctly(self, tmp_path: Path):
+        """M2 regression: server returning 206 (Partial Content) appends correctly."""
+        url = "https://dumps.wikimedia.org/test.sql.gz"
+        dest = tmp_path / "test.sql.gz"
+        partial = dest.with_suffix(".gz.partial")
+        partial.write_bytes(b"hel")
+        # Server honours Range → 206
+        responses.add(responses.HEAD, url, headers={"Content-Length": "5"})
+        responses.add(responses.GET, url, body=b"lo", status=206, stream=True)
+        result = download_dump(url, dest)
+        assert result == dest
+        assert dest.read_bytes() == b"hello"
+
+    @responses.activate
     def test_removes_partial_on_success(self, tmp_path: Path):
         url = "https://dumps.wikimedia.org/test.sql.gz"
         dest = tmp_path / "test.sql.gz"

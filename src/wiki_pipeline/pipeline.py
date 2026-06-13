@@ -294,9 +294,10 @@ def run(config: PipelineConfig) -> Path | None:
             "scientists", "visual_artists", "writers_authors",
         )},
         **{s: "geo" for s in (
-            "admin_subdivisions", "populated_places", "geographic_features",
-            "parks_protected", "transportation", "buildings_structures",
-            "historical_cultural", "demographics_economy",
+            "admin_subdivisions", "populated_places", "transportation",
+            "buildings_structures", "historical_cultural", "demographics_economy",
+            "rivers", "lakes", "peaks", "landforms", "landmarks",
+            "coastlines", "mountain_ranges", "protected_areas",
         )},
     }
 

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import re
 from pathlib import Path
 
 from .config import wiki_to_lang
+
+logger = logging.getLogger(__name__)
 
 _SUFFIX_RE = re.compile(
     r"\s+(?:county|parish|borough|census\s+area|municipality|district"
@@ -25,12 +28,26 @@ def normalize(title: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
 
+def _write_collisions(collisions: list[dict], path: Path) -> None:
+    """Append collision rows to a CSV at path."""
+    write_header = not path.exists()
+    with open(path, "a", newline="") as f:
+        if collisions:
+            w = csv.DictWriter(f, fieldnames=list(collisions[0].keys()))
+            if write_header:
+                w.writeheader()
+            w.writerows(collisions)
+
+
 def build_gadm_index(gadm_data_dir: Path) -> dict[str, str]:
     """Walk regions/*.json, return {normalized_key: GID_2}.
 
     Key = normalize(NAME_2 + ", " + NAME_1).
+    First encountered entry wins on key collision; duplicate logged + written to
+    gadm_key_collisions.csv next to the regions dir.
     """
     index: dict[str, str] = {}
+    collision_rows: list[dict] = []
     regions_dir = gadm_data_dir / "regions"
     if not regions_dir.is_dir():
         return index
@@ -46,15 +63,31 @@ def build_gadm_index(gadm_data_dir: Path) -> dict[str, str]:
             if not gid2 or not name2 or not name1:
                 continue
             key = normalize(f"{name2}, {name1}")
-            index[key] = gid2
+            if key in index:
+                existing = index[key]
+                logger.warning(
+                    "GADM key collision: key=%r winner=%r loser=%r (file=%s)",
+                    key, existing, gid2, path.name,
+                )
+                collision_rows.append({"key": key, "winner_gid2": existing, "loser_gid2": gid2, "source": path.name})
+            else:
+                index[key] = gid2
+
+    if collision_rows:
+        _write_collisions(collision_rows, gadm_data_dir / "gadm_key_collisions.csv")
+
     return index
 
 
 def transform(csv_path: Path, gadm_data_dir: Path, output_path: Path, wiki: str = "enwiki") -> None:
-    """Read CSV, match titles to GID_2, write wikipedia.json."""
+    """Read CSV, match titles to GID_2, write wikipedia.json.
+
+    First matched row wins on duplicate GID_2; collision logged + written to collisions.csv.
+    """
     index = build_gadm_index(gadm_data_dir)
     result: dict[str, dict] = {}
     unmatched: list[dict] = []
+    collision_rows: list[dict] = []
 
     with open(csv_path) as f:
         reader = csv.DictReader(f)
@@ -67,6 +100,14 @@ def transform(csv_path: Path, gadm_data_dir: Path, output_path: Path, wiki: str 
 
             if gid2 is None:
                 unmatched.append(row)
+                continue
+
+            if gid2 in result:
+                logger.warning(
+                    "GID_2 collision: gid2=%r winner=%r loser=%r",
+                    gid2, result[gid2]["title"], title,
+                )
+                collision_rows.append({"gid2": gid2, "winner_title": result[gid2]["title"], "loser_title": title})
                 continue
 
             entry: dict[str, str] = {"title": title}
@@ -91,5 +132,8 @@ def transform(csv_path: Path, gadm_data_dir: Path, output_path: Path, wiki: str 
             w.writeheader()
             w.writerows(unmatched)
         print(f"  {len(unmatched)} unmatched rows → {unmatched_path}")
+
+    if collision_rows:
+        _write_collisions(collision_rows, output_path.parent / "collisions.csv")
 
     print(f"  {len(result)} matched → {output_path}")

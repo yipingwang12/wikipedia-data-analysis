@@ -25,6 +25,7 @@ def run_pipeline(
         sys.executable, "-m", "wiki_pipeline.pipeline",
         "--patterns-file", str(patterns_file),
         "--extraction-mode", extraction_mode,
+        "--output-format", "csv",
         "--results-dir", str(results_dir),
         "--wiki", wiki,
     ]

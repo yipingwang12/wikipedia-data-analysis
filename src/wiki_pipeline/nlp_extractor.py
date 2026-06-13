@@ -376,16 +376,35 @@ def _extract_dates(text: str) -> tuple[str | None, str | None]:
     return _extract_dates_fallback(text)
 
 
+_MULTIWORD_NATIONALITIES = sorted(
+    (n for n in NATIONALITIES if " " in n), key=len, reverse=True
+)
+
+
+def _consume_multiword_nationalities(clause: str) -> tuple[list[str], str]:
+    """Scan clause for multi-word nationalities, return (found, remaining_clause).
+
+    Replaces matched phrases with a placeholder so subsequent tokenization
+    cannot see their constituent words as orphaned tokens.
+    """
+    found: list[str] = []
+    remaining = clause
+    for nat in _MULTIWORD_NATIONALITIES:
+        pattern = re.compile(r"\b" + re.escape(nat) + r"\b", re.IGNORECASE)
+        if pattern.search(remaining):
+            found.append(" ".join(w.capitalize() for w in nat.split()))
+            remaining = pattern.sub("", remaining)
+    return found, remaining
+
+
 def _extract_nationality(clause: str) -> str | None:
     """Extract nationality from a 'was a/an ...' clause."""
     if not clause:
         return None
 
-    found: list[str] = []
-    # Tokenize: split on spaces and "and"
-    # Handle "Polish and naturalised-French" -> ["Polish", "naturalised-French"]
-    tokens = re.split(r"\s+", clause.strip())
+    found, clause = _consume_multiword_nationalities(clause)
 
+    tokens = re.split(r"\s+", clause.strip())
     for token in tokens:
         lower = token.lower().rstrip(".,;")
         if lower == "and":
@@ -398,8 +417,6 @@ def _extract_nationality(clause: str) -> str | None:
                 found.append(part.capitalize())
                 break
 
-        # Check two-word nationalities with next token
-        # (handled by checking the full lowered token against multi-word entries)
         if lower in NATIONALITIES:
             cap = " ".join(w.capitalize() for w in lower.split())
             if cap not in found:
@@ -425,6 +442,9 @@ def _extract_occupation(clause: str) -> str | None:
     if not clause:
         return None
 
+    # Remove multi-word nationalities before tokenizing to avoid word leakage
+    _, clause = _consume_multiword_nationalities(clause)
+
     found: list[str] = []
     tokens = re.split(r"\s+", clause.strip())
 
@@ -433,13 +453,15 @@ def _extract_occupation(clause: str) -> str | None:
         token = tokens[i]
         lower = token.lower().rstrip(".,;")
 
+        if not lower:
+            i += 1
+            continue
+
         # Skip nationalities and connectors
         if lower == "and" or lower == "or":
-            # "and" between occupations: look ahead
             if found:
                 i += 1
                 continue
-            # "and" between nationalities: skip
             i += 1
             continue
 
@@ -456,12 +478,6 @@ def _extract_occupation(clause: str) -> str | None:
                 continue
 
         # Check for hyphenated occupation (e.g., "singer-songwriter")
-        if lower in OCCUPATIONS:
-            found.append(lower)
-            i += 1
-            continue
-
-        # Check if this token is a known occupation
         if lower in OCCUPATIONS:
             found.append(lower)
             i += 1

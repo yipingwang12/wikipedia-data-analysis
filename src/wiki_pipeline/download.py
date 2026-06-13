@@ -58,19 +58,21 @@ def download_dump(url: str, dest: Path) -> Path:
 def _download_stream(url: str, dest: Path, headers: dict[str, str], total: int) -> None:
     """Stream download to dest with resume support and progress bar."""
     resume_pos = 0
-    mode = "wb"
     req_headers = dict(headers)
 
     if dest.exists():
         resume_pos = dest.stat().st_size
         if total and resume_pos < total:
             req_headers["Range"] = f"bytes={resume_pos}-"
-            mode = "ab"
         elif resume_pos >= total > 0:
             return  # already complete
 
     with requests.get(url, headers=req_headers, stream=True, timeout=300) as r:
         r.raise_for_status()
+        # If we requested a range but server returned 200 (full body), restart from scratch.
+        if "Range" in req_headers and r.status_code != 206:
+            resume_pos = 0
+        mode = "ab" if resume_pos > 0 else "wb"
         with open(dest, mode) as f:
             downloaded = resume_pos
             start_time = time.time()

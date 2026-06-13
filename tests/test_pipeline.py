@@ -600,6 +600,110 @@ class TestPipelineThreeTierExtraction:
         mock_llm_cls.return_value.extract_missing.assert_not_called()
 
 
+class TestGeoPatternStemResolution:
+    """M5 regression: geo pattern files must resolve to 'geo' mode, not fall through to 'bio'."""
+
+    def _make_config(self, tmp_path, stem):
+        from wiki_pipeline.config import PipelineConfig
+        return PipelineConfig(
+            root_category=None,
+            category_patterns=("river",),
+            pattern_groups=((stem, ("river",)),),
+            data_dir=tmp_path / "data",
+            results_dir=tmp_path / "results",
+            min_page_length=100,
+            dry_run=False,
+            no_cache=True,
+            clear_cache=False,
+            use_api=True,
+            extraction_mode="auto",
+        )
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.WikiApiClient")
+    @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
+    @patch("wiki_pipeline.pipeline.extract_geo_infobox_fields")
+    @patch("wiki_pipeline.pipeline.extract_infobox_fields")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_rivers_stem_uses_geo_extractor(
+        self, mock_dotenv, mock_bio_extract, mock_geo_extract,
+        mock_nlp, mock_llm_cls, mock_api_cls,
+        mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
+    ):
+        """patterns/geo/rivers.txt stem must select geo extractor, not bio."""
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = ({1: "Rivers_of_France"}, {100: ("Seine_River", 6000)})
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(
+            cat_pages={"Rivers_of_France": {100}},
+        )
+        mock_filter.return_value = [PageInfo(100, "Seine_River", 6000)]
+        api = mock_api_cls.return_value
+        api.fetch_wikitext_batch.return_value = {"Seine River": "{{Infobox river|length=775}}"}
+        api.fetch_plaintext_batch.return_value = {"Seine River": "The Seine is a river."}
+        mock_geo_extract.return_value = {
+            "population": None, "area_km2": None, "elevation_m": None,
+            "subdivision_name": None, "subdivision_type": None,
+        }
+        mock_nlp.side_effect = lambda text, existing, fields: dict(existing)
+        mock_llm_cls.return_value.extract_missing.return_value = {
+            "population": None, "area_km2": None, "elevation_m": None,
+            "subdivision_name": None, "subdivision_type": None,
+        }
+
+        config = self._make_config(tmp_path, "rivers")
+        run(config)
+
+        mock_geo_extract.assert_called()
+        mock_bio_extract.assert_not_called()
+
+    @patch("wiki_pipeline.pipeline.download_dump")
+    @patch("wiki_pipeline.pipeline.parse_page_dump")
+    @patch("wiki_pipeline.pipeline.build_linktarget_map")
+    @patch("wiki_pipeline.pipeline.parse_category_links")
+    @patch("wiki_pipeline.pipeline.filter_pages_from_meta")
+    @patch("wiki_pipeline.pipeline.WikiApiClient")
+    @patch("wiki_pipeline.pipeline.LlmExtractor")
+    @patch("wiki_pipeline.pipeline.extract_from_text")
+    @patch("wiki_pipeline.pipeline.extract_geo_infobox_fields")
+    @patch("wiki_pipeline.pipeline.extract_infobox_fields")
+    @patch("wiki_pipeline.pipeline.load_dotenv")
+    def test_lakes_stem_uses_geo_extractor(
+        self, mock_dotenv, mock_bio_extract, mock_geo_extract,
+        mock_nlp, mock_llm_cls, mock_api_cls,
+        mock_filter, mock_catlinks, mock_lt, mock_page, mock_download, tmp_path
+    ):
+        """patterns/geo/lakes.txt stem must select geo extractor."""
+        mock_download.side_effect = lambda url, dest: dest
+        mock_page.return_value = ({1: "Lakes_in_France"}, {100: ("Lake_Geneva", 6000)})
+        mock_lt.return_value = {}
+        mock_catlinks.return_value = ParsedCategoryLinks(cat_pages={"Lakes_in_France": {100}})
+        mock_filter.return_value = [PageInfo(100, "Lake_Geneva", 6000)]
+        api = mock_api_cls.return_value
+        api.fetch_wikitext_batch.return_value = {"Lake Geneva": "{{Infobox lake}}"}
+        api.fetch_plaintext_batch.return_value = {"Lake Geneva": "Lake Geneva is a lake."}
+        mock_geo_extract.return_value = {
+            "population": None, "area_km2": None, "elevation_m": None,
+            "subdivision_name": None, "subdivision_type": None,
+        }
+        mock_nlp.side_effect = lambda text, existing, fields: dict(existing)
+        mock_llm_cls.return_value.extract_missing.return_value = {
+            "population": None, "area_km2": None, "elevation_m": None,
+            "subdivision_name": None, "subdivision_type": None,
+        }
+
+        config = self._make_config(tmp_path, "lakes")
+        run(config)
+
+        mock_geo_extract.assert_called()
+        mock_bio_extract.assert_not_called()
+
+
 class TestPipelineEtymologyMode:
     """Etymology mode: section parser → lead scan → LLM fallback chain."""
 

@@ -145,3 +145,111 @@ class TestTransform:
         data = json.loads(output.read_text())
         entry = data["USA.14.17_1"]
         assert entry["wikipedia_url"] == "https://fr.wikipedia.org/wiki/Cook_County,_Illinois"
+
+
+class TestTransformCollisions:
+    """M3 regression: duplicate keys must warn and record collisions, not silently discard."""
+
+    def test_gadm_duplicate_key_warns(self, tmp_path):
+        """Two GADM regions normalizing to the same key should log a warning."""
+        from unittest.mock import patch
+        import wiki_pipeline.transform as transform_mod
+
+        regions = tmp_path / "regions"
+        regions.mkdir()
+        data = {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "properties": {
+                    "GID_2": "USA.1.1_1", "NAME_2": "Springfield", "NAME_1": "Illinois",
+                }, "geometry": None},
+                # Duplicate: same normalized key "springfield, illinois"
+                {"type": "Feature", "properties": {
+                    "GID_2": "USA.1.2_1", "NAME_2": "Springfield", "NAME_1": "Illinois",
+                }, "geometry": None},
+            ],
+        }
+        (regions / "test.json").write_text(json.dumps(data))
+
+        with patch.object(transform_mod.logger, "warning") as mock_warn:
+            build_gadm_index(tmp_path)
+            mock_warn.assert_called_once()
+
+    def test_gadm_duplicate_key_deterministic_winner(self, tmp_path):
+        """When two GADM regions share a normalized key, the first (sorted file order) wins."""
+        regions = tmp_path / "regions"
+        regions.mkdir()
+        data = {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "properties": {
+                    "GID_2": "FIRST", "NAME_2": "Springfield", "NAME_1": "Illinois",
+                }, "geometry": None},
+                {"type": "Feature", "properties": {
+                    "GID_2": "SECOND", "NAME_2": "Springfield", "NAME_1": "Illinois",
+                }, "geometry": None},
+            ],
+        }
+        (regions / "test.json").write_text(json.dumps(data))
+        index = build_gadm_index(tmp_path)
+        # First encountered wins
+        assert index["springfield, illinois"] == "FIRST"
+
+    def test_gadm_collision_written_to_collisions_csv(self, tmp_path):
+        """Collision in build_gadm_index must produce a collisions log."""
+        regions = tmp_path / "regions"
+        regions.mkdir()
+        data = {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "properties": {
+                    "GID_2": "GID_A", "NAME_2": "River", "NAME_1": "State",
+                }, "geometry": None},
+                {"type": "Feature", "properties": {
+                    "GID_2": "GID_B", "NAME_2": "River", "NAME_1": "State",
+                }, "geometry": None},
+            ],
+        }
+        (regions / "test.json").write_text(json.dumps(data))
+        build_gadm_index(tmp_path)
+        collisions_path = tmp_path / "gadm_key_collisions.csv"
+        assert collisions_path.exists()
+        content = collisions_path.read_text()
+        assert "GID_B" in content
+
+    def test_transform_duplicate_gid2_warns(self, gadm_dir, tmp_path):
+        """Two CSV rows matching same GID_2 must warn and keep the first."""
+        csv_file = tmp_path / "dup.csv"
+        with open(csv_file, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["page_id", "title", "population"])
+            w.writeheader()
+            # Two titles both normalize to "cook, illinois" → same GID_2
+            w.writerow({"page_id": "1", "title": "Cook County, Illinois", "population": "5000000"})
+            w.writerow({"page_id": "2", "title": "Cook County, Illinois", "population": "9999999"})
+
+        output = tmp_path / "wikipedia.json"
+        from unittest.mock import patch
+        import wiki_pipeline.transform as transform_mod
+        with patch.object(transform_mod.logger, "warning") as mock_warn:
+            transform(csv_file, gadm_dir, output)
+            mock_warn.assert_called_once()
+
+        data = json.loads(output.read_text())
+        # First row wins
+        assert data["USA.14.17_1"]["population"] == "5000000"
+
+    def test_transform_duplicate_gid2_recorded_in_collisions(self, gadm_dir, tmp_path):
+        """Second CSV row with duplicate GID_2 must appear in collisions log."""
+        csv_file = tmp_path / "dup.csv"
+        with open(csv_file, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["page_id", "title", "population"])
+            w.writeheader()
+            w.writerow({"page_id": "1", "title": "Cook County, Illinois", "population": "5000000"})
+            w.writerow({"page_id": "2", "title": "Cook County, Illinois", "population": "9999999"})
+
+        output = tmp_path / "wikipedia.json"
+        transform(csv_file, gadm_dir, output)
+        collisions_path = tmp_path / "collisions.csv"
+        assert collisions_path.exists()
+        content = collisions_path.read_text()
+        assert "9999999" in content or "Cook County, Illinois" in content
