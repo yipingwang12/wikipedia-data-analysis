@@ -47,3 +47,23 @@ Ollama model and endpoint are read from `OLLAMA_MODEL` / `OLLAMA_BASE_URL` env v
 
 - **`infobox_parser.py`**: added `infobox royalty`, `infobox monarch`, `infobox noble`, `infobox pharaoh` to `BIO_CONFIG.infobox_names` — previously these templates were unrecognised and all fields returned `None`
 - **`nlp_extractor.py`**: `_WAS_A_RE` now matches `"was/is the ..."` in addition to `"was/is a/an ..."` — simplewiki ruler articles use the definite article ("was the King of England") which the old regex missed
+
+## ⚠ Wikimedia is blocked — open a window before any API run
+
+`productivity-guardian` blocks Wikimedia at the **pf layer, by IP**. Every language edition
+and sister project shares one anycast text-lb IP, so a block on `wikipedia.org` also stops
+`www.mediawiki.org` and `query.wikidata.org` — names this repo never lists in a blocklist.
+
+```sh
+cd ~/Documents/Projects/productivity-guardian && ./Scripts/wiki_open.sh -m 120
+# or from the orchestrator: task wiki-open -- -m 120
+```
+
+Expires on its own; `--close` ends it early, `--status` shows it.
+
+**What actually needs the window:** stage 5 **API fetch** (`wiki_api.py` →
+`en.wikipedia.org/w/api.php`, i.e. `--no-multistream` and the coverage/cross-check paths).
+
+**What does not:** stage 1 dump downloads (`dumps.wikimedia.org`) and every cached run —
+`dumps.wikimedia.org` is on a different IP and never blocked. With warm caches in
+`data/.cache/{wiki}/` a regex/BFS run is fully offline, so most work here needs no window at all.
